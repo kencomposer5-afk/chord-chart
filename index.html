@@ -717,14 +717,24 @@ async function readImageURLs(urls){
         if(c>=hh*0.9){ if(run&&x-run.b<=2) run.b=x; else { run={a:x,b:x}; runs.push(run);} } }
       const bl=[]; runs.forEach(r=>{ const cx=(r.a+r.b)/2; if(bl.length&&cx-bl[bl.length-1]<W*0.03) bl[bl.length-1]=cx; else bl.push(cx); });   // double bars / repeat signs count once
       if(bl.length<2) continue;
-      // intervals between bar lines; drop a leading one that is full of ink (clef / key signature)
+      // clef / key signature / time signature sit before the first bar and are not separated from it by a bar line:
+      // scan the ink from the left edge and start the first bar where that signature zone ends
       const isLine=y=>st.lines.some(l=>y>=l.a-1&&y<=l.b+1);
-      const ink=(x0,x1)=>{ let d=0,t=0; for(let x=Math.ceil(x0)+3;x<x1-3;x++) for(let y=st.top;y<=st.bottom;y++){ if(isLine(y)) continue; t++; if(dark(x,y)) d++; } return t? d/t : 0; };
-      let n=bl.length-1, s0=0;
-      if(n>=1 && ink(bl[0],bl[1])>0.08){ n--; s0=1; }
+      const inkCol=x=>{ if(bl.some(b=>Math.abs(b-x)<=2)) return false; for(let y=st.top;y<=st.bottom;y++){ if(!isLine(y)&&dark(x,y)) return true; } return false; };
+      let sigEnd=bl[0], last=bl[0];
+      for(let x=Math.ceil(bl[0])+3;x<W;x++){ if(inkCol(x)) last=x; else if(x-last>W*0.025) break; }
+      if(last>bl[0]) sigEnd=last;
+      const starts=[sigEnd+2,...bl.filter(x=>x>sigEnd+3)];
+      if(starts.length>1){        // a bar line right after the signature leaves an empty gap: drop it unless chords stand above it
+        const w1=starts[1]-starts[0], qq=(st.bottom-st.top)/4;
+        let chordInk=0;
+        if(w1<W*0.12) for(let x=Math.ceil(starts[0])+6;x<starts[1]-2;x++) for(let y=Math.max(0,Math.round(st.top-5.6*qq));y<st.top-2;y++) if(dark(x,y)) chordInk++;
+        if(w1<W*0.05 || (w1<W*0.12 && chordInk<30)) starts.shift();
+      }
+      const n=starts.length-1;
       if(n<1) continue;
       const q=(st.bottom-st.top)/4;
-      for(let k=0;k<n;k++) geo.push({p:pi,row:rowNo,x0:bl[s0+k]*sc,x1:bl[s0+k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc});
+      for(let k=0;k<n;k++) geo.push({p:pi,row:rowNo,x0:starts[k]*sc,x1:starts[k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc});
       rows.push(Array(n).fill('?').join(' | ')+' |'); rowNo++;
     }
   }
