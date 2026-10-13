@@ -250,6 +250,10 @@ struct ChordChartApp: App {
         WindowGroup("コード譜リレイアウト") {
             WebView(url: URL(string: "http://127.0.0.1:\(port)/index.html")!)
                 .frame(minWidth: 1000, minHeight: 700)
+                .onAppear {
+                    NSApp.setActivationPolicy(.regular)               // make sure the window takes clicks and keyboard input
+                    NSApp.activate(ignoringOtherApps: true)
+                }
         }
     }
 }
