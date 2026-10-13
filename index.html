@@ -256,9 +256,11 @@ function useFlats(pcv, mode){
   return MAJ_FLAT.has(name);
 }
 
+const QUALITY_RE = /^(?:maj|min|mmaj|m|M|dim|aug|sus|add|alt|omit|[-+°ø△Δ0-9#b♭♯(),])*$/;
 function parseChord(tok){
   if (tok==='N.C.' || tok==='NC') return null;
   const m = CHORD_RE.exec(tok);
+  if (!m || !QUALITY_RE.test(m[3])) return null;   // D.S. / Fine / a-tempo are not chords
   return m ? {root:pc(m[1],m[2]), q:m[3], bass: m[4]? pc(m[4],m[5]) : null} : null;
 }
 
