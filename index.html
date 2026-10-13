@@ -158,6 +158,8 @@ button:active{transform:translateY(1px)}
         <input id="fileIn" type="file" accept=".json,.chord,application/json" style="display:none">
       </div>
       <div class="hint" id="importMsg" style="margin:-2px 0 8px"></div>
+      <div class="hint" id="libInfo" style="margin:-4px 0 8px"></div>
+      <button id="libReset" style="margin:0 0 8px;font-size:12px;padding:3px 8px" title="覚えたコードの見た目をすべて消します">🧠 覚えた見た目を消す</button>
       <input id="titleIn" type="text" placeholder="曲名">
       <input id="creditIn" type="text" placeholder="作曲・作詞など(任意)" style="margin-top:6px">
       <label>コード(<code>|</code> で小節、<code>[A]</code> でセクション)</label>
@@ -554,7 +556,8 @@ function srcTok1(v){ return parseChord(v) ? transposeTok(v,-S.shift,useFlats(key
 function srcTok(v){ return v.trim().split(/\s+/).map(srcTok1).join(' '); }
 function editSrc(fn){ S.src=fn(S.src); render(); }
 $('chOk').onclick=()=>{ const v=$('chIn').value.trim(); if(!v||SELCH===null) return;
-  const [a,b]=BARS[SEL].pos[SELCH]; editSrc(x=>x.slice(0,a)+srcTok(v)+x.slice(b)); };
+  const bi=SEL, [a,b]=BARS[SEL].pos[SELCH]; editSrc(x=>x.slice(0,a)+srcTok(v)+x.slice(b));
+  if(BARS.length===BARGEO.length){ learnBar(bi,BARS[bi].chords.slice()); const n=applyLibrary(); if(n) $('importMsg').textContent=`覚えた見た目から、同じコードの ${n} 小節を自動で埋めました(緑の点線)。`; } };
 function goChord(d){
   const flat=[]; BARS.forEach((b,bi)=>b.chords.forEach((_,k)=>flat.push([bi,k])));
   const cur=flat.findIndex(([bi,k])=>bi===SEL&&k===SELCH), n=flat[cur+d]; if(!n) return;
@@ -681,6 +684,15 @@ function guessKey(ch){
 }
 // ---------- images (PNG/JPG): detect rows and bars, chords are typed in by hand ----------
 const fileToURL=f=>new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(r.error); r.readAsDataURL(f); });
+// bars whose chord symbols look the same (same width / height / pixels) get the same cluster id
+function clusterBars(geo){
+  const par=geo.map((_,i)=>i), find=i=>par[i]===i?i:(par[i]=find(par[i]));
+  for(let i=0;i<geo.length;i++){ const a=geo[i].sig; if(!a) continue;
+    for(let j=i+1;j<geo.length;j++){ const b=geo[j].sig; if(!b) continue;
+      if(Math.abs(a.w-b.w)>0.25||Math.abs(a.h-b.h)>0.25) continue;
+      let d=0; for(let k=0;k<a.g.length;k++) d+=Math.abs(a.g[k]-b.g[k]); if(d/a.g.length<0.07) par[find(j)]=find(i); } }
+  geo.forEach((g,i)=>{ g.cl=g.sig?find(i):-1; });
+}
 async function readImages(files){ const urls=[]; for(const f of files) urls.push(await fileToURL(f)); return readImageURLs(urls); }
 async function readImageURLs(urls){
   const rows=[], pages=[], geo=[];
@@ -734,10 +746,44 @@ async function readImageURLs(urls){
       const n=starts.length-1;
       if(n<1) continue;
       const q=(st.bottom-st.top)/4;
-      for(let k=0;k<n;k++) geo.push({p:pi,row:rowNo,x0:starts[k]*sc,x1:starts[k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc});
+      const staffTokens=()=>{
+        const y0=Math.max(0,Math.round(st.top-5.6*q)), y1=st.top-2, h=y1-y0; if(h<q*2) return [];
+        const lab=new Int32Array(W*h), comps=[], ink=(x,y)=>{ const i=((y0+y)*W+x)*4; return 0.299*px[i]+0.587*px[i+1]+0.114*px[i+2]<150; };
+        for(let y=0;y<h;y++) for(let x=0;x<W;x++){
+          if(lab[y*W+x]||!ink(x,y)) continue;
+          const id=comps.length+1, stk=[[x,y]], pts=[]; lab[y*W+x]=id; let a=x,b=x,c=y,d=y;
+          while(stk.length){ const [cx,cy]=stk.pop(); pts.push([cx,cy]); if(cx<a)a=cx; if(cx>b)b=cx; if(cy<c)c=cy; if(cy>d)d=cy;
+            for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ const nx=cx+dx, ny=cy+dy; if(nx<0||ny<0||nx>=W||ny>=h||lab[ny*W+nx]||!ink(nx,ny)) continue; lab[ny*W+nx]=id; stk.push([nx,ny]); } }
+          comps.push({a,b,c,d,n:pts.length,pts});
+        }
+        const frames=comps.filter(c=>(c.b-c.a)>3*q&&(c.d-c.c)>1.4*q&&c.n<(c.b-c.a+1)*(c.d-c.c+1)*0.5);
+        let cs=comps.filter(c=>!frames.includes(c)&&!frames.some(B=>c.a>=B.a&&c.b<=B.b&&c.c>=B.c&&c.d<=B.d)&&c.n>=3&&(c.b-c.a)<8*q).sort((a,b)=>a.a-b.a);
+        const merged=[];
+        for(const c of cs){ const m=merged.find(t=>{ const ov=Math.min(t.b,c.b)-Math.max(t.a,c.a); return ov>0.5*Math.min(t.b-t.a+1,c.b-c.a+1)&&(Math.max(t.c,c.c)-Math.min(t.d,c.d))<0.6*q; });
+          if(m){ m.a=Math.min(m.a,c.a); m.b=Math.max(m.b,c.b); m.c=Math.min(m.c,c.c); m.d=Math.max(m.d,c.d); m.pts=m.pts.concat(c.pts); } else merged.push({...c}); }
+        const toks=[];
+        for(const c of merged){ const t=toks[toks.length-1];
+          if(t&&c.a-t.b<=0.6*q){ t.b=Math.max(t.b,c.b); t.c=Math.min(t.c,c.c); t.d=Math.max(t.d,c.d); t.pts=t.pts.concat(c.pts); } else toks.push({a:c.a,b:c.b,c:c.c,d:c.d,pts:c.pts.slice()}); }
+        return toks.map(t=>{ const w=t.b-t.a+1, hh=t.d-t.c+1, GX=16, GY=12, g=new Float32Array(GX*GY);
+          t.pts.forEach(([x,y])=>g[Math.min(GY-1,Math.floor((y-t.c)/hh*GY))*GX+Math.min(GX-1,Math.floor((x-t.a)/w*GX))]++);
+          const A=(w/GX)*(hh/GY);
+          return {cx:(t.a+t.b)/2, sig:{w:+(w/q).toFixed(2),h:+(hh/q).toFixed(2),g:Array.from(g,v=>+Math.min(1,v/Math.max(1,A)).toFixed(2))}}; });
+      };
+      const stToks=staffTokens();
+      const sigOf=(xa,xb)=>{      // look of the chord symbols in this bar (same font & size everywhere => same chords look the same)
+        const y0=Math.max(0,Math.round(st.top-5.6*q)), y1=st.top-2; let a=1e9,b=-1,c=1e9,d=-1; const pts=[];
+        for(let x=Math.ceil(xa);x<xb;x++) for(let y=y0;y<y1;y++){ const i=(y*W+x)*4; if(0.299*px[i]+0.587*px[i+1]+0.114*px[i+2]<150){ pts.push([x,y]); if(x<a)a=x; if(x>b)b=x; if(y<c)c=y; if(y>d)d=y; } }
+        if(pts.length<12) return null;
+        const w=b-a+1, h=d-c+1, GX=16, GY=12, g=new Float32Array(GX*GY);
+        pts.forEach(([x,y])=>g[Math.min(GY-1,Math.floor((y-c)/h*GY))*GX+Math.min(GX-1,Math.floor((x-a)/w*GX))]++);
+        const A=(w/GX)*(h/GY);
+        return {w:+(w/q).toFixed(2),h:+(h/q).toFixed(2),g:Array.from(g,v=>+Math.min(1,v/Math.max(1,A)).toFixed(2))};
+      };
+      for(let k=0;k<n;k++) geo.push({p:pi,row:rowNo,x0:starts[k]*sc,x1:starts[k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc,sig:sigOf(starts[k]+2,starts[k+1]-2),toks:stToks.filter(t=>t.cx>=starts[k]&&t.cx<starts[k+1]).map(t=>t.sig)});
       rows.push(Array(n).fill('?').join(' | ')+' |'); rowNo++;
     }
   }
+  clusterBars(geo);
   return {rows,pages,geo};
 }
 
@@ -757,6 +803,7 @@ async function finishImageImport(r,msg){
   try{
     const {res,conf}=await autoRead((i,n)=>{ msg.textContent=`コードを自動で読み取り中… ${i+1}/${n} 小節`; });
     applyOcr(res,conf);
+    const nLib=applyLibrary();
     const got=res.filter(x=>x!=='?').length, low=[...UNVER.values()].filter(v=>v==='low').length;
     msg.textContent=`${metaNote} ${r.rows.length} 段、${nb} 小節。自動で ${got} 小節にコードを入れました(自信の高さで、緑・黄・赤の点線で囲んであります。赤は ${low} 小節)。精度は低く(合っているのは3〜5割程度。緑の小節は約9割、赤の小節はほとんど間違いです)、♯や「7」が落ちることが多いです。原本の拡大を見ながら、コードをクリックして直してください。見た小節の点線は消えます。読み取れなかった小節は「?」です。`;
   }catch(err){
@@ -764,6 +811,7 @@ async function finishImageImport(r,msg){
   }
 }
 
+$('libReset').onclick=()=>{ if(!TOKLIB.length||!confirm('覚えたコードの見た目をすべて消しますか?')) return; TOKLIB=[]; idb.set('toklib',[]).catch(()=>{}); updLibInfo(); };
 $('loadPdf').onclick=()=>$('pdfIn').click();
 $('pdfIn').onchange=async e=>{
   const files=[...e.target.files]; e.target.value=''; const f=files[0]; if(!f) return; e.target.__files=files;
@@ -811,6 +859,7 @@ function applyView(){
 $('viewTabs').onclick=e=>{ if(e.target.dataset.v){ S.view=e.target.dataset.v; render(); } };
 $('oz').oninput=()=>[...$('origImgs').children].forEach(im=>im.style.width=$('oz').value+'%');
 $('oClear').onclick=()=>{ if(!confirm('読み込んだ原本の画像を消しますか?(譜面は消えません)')) return; setPages([]); S.view='chart'; renderOrig(); render(); };
+idb.get('toklib').then(l=>{ if(l&&l.length){ TOKLIB=l; updLibInfo(); } }).catch(()=>{});
 idb.get('pages').then(async p=>{ if(p&&p.length){ PAGES=p; try{ BARGEO=(await idb.get('bargeo'))||[]; }catch(e){} renderOrig(); render(); } }).catch(()=>{});
 
 const LENS_IMG={};
@@ -895,7 +944,17 @@ async function autoRead(onProgress){
       if(crops[i]){ const two=wordsToChords(ocrWords(await w.recognize(crops[i],{},{blocks:true}))); if(two.some(x=>x.c.includes('/'))) ch=two; }
       res.push(ch.length?ch.map(x=>x.c).join(' '):'?'); conf.push(ch.length?Math.min(...ch.map(x=>x.conf)):0);
     }
-    window.OCR_LAST={one,res,conf};
+    window.OCR_LAST={one,res:res.slice(),conf:conf.slice()};
+    // bars that look identical must hold the same chords: let every member of a cluster vote (weighted by confidence)
+    const groups=new Map(); BARGEO.forEach((g,i)=>{ if(g.cl>=0){ (groups.get(g.cl)||groups.set(g.cl,[]).get(g.cl)).push(i); } });
+    for(const idx of groups.values()){
+      if(idx.length<2) continue;
+      const score=new Map(); idx.forEach(i=>{ if(res[i]!=='?') score.set(res[i],(score.get(res[i])||0)+Math.max(1,conf[i])); });
+      if(!score.size) continue;
+      const best=[...score.entries()].sort((a,b)=>b[1]-a[1])[0][0], agree=idx.filter(i=>res[i]===best);
+      const avg=agree.reduce((a,i)=>a+conf[i],0)/agree.length, bonus=agree.length>=3?15:agree.length===2?8:0;
+      idx.forEach(i=>{ res[i]=best; conf[i]=Math.min(100,avg+bonus); });
+    }
     return {res,conf};
   } finally { OCR_RUNNING=false; }
 }
@@ -1012,6 +1071,43 @@ function metaFromItems(items,y1){      // Vision JSON: words above y1 -> lines -
   for(const o of its){ const L=lines.find(l=>Math.abs(l.cy-(o.y+o.h/2))<0.6*Math.max(l.h,o.h));
     if(L){ L.w.push(o); L.h=Math.max(L.h,o.h); } else lines.push({cy:o.y+o.h/2,h:o.h,w:[o]}); }
   return pickTitle(lines.map(l=>({t:l.w.sort((a,b)=>a.x-b.x).map(o=>o.t).join(' '),h:l.h})));
+}
+
+// ---------- learning the chord font: look of a chord symbol -> chord name ----------
+let TOKLIB=[];                                   // [{sig, text}]
+const sigDist=(a,b)=>{ if(Math.abs(a.w-b.w)>0.3||Math.abs(a.h-b.h)>0.3) return 9; let d=0; for(let k=0;k<a.g.length;k++) d+=Math.abs(a.g[k]-b.g[k]); return d/a.g.length; };
+const SIG_T=0.08;
+function lookup(sig){      // nearest learned look; refuse when a different chord is almost as close (ambiguous)
+  let best=null,bd=9, od=9;
+  for(const e of TOKLIB){ const d=sigDist(sig,e.sig); if(d<bd){ if(best&&best.text!==e.text) od=Math.min(od,bd); bd=d; best=e; } else if(best&&e.text!==best.text&&d<od) od=d; }
+  return (bd<=SIG_T && (od>=0.11 || od>=bd*1.4)) ? best : null;
+}
+function updLibInfo(){ const el=$('libInfo'); if(el) el.textContent=TOKLIB.length? `覚えた見た目: ${new Set(TOKLIB.map(e=>e.text)).size} 種類のコード(ほかの曲にも使えます)` : ''; }
+function learnBar(i,texts){                      // texts: the chords of bar i as confirmed by the user
+  const g=BARGEO[i]; if(!g||!g.toks||g.toks.length!==texts.length) return 0;
+  let n=0;
+  g.toks.forEach((sg,k)=>{ if(!parseChord(texts[k].split('/')[0])) return;
+    const e=lookup(sg); if(e){ e.text=texts[k]; } else { TOKLIB.push({sig:sg,text:texts[k]}); n++; } });
+  idb.set('toklib',TOKLIB).catch(()=>{}); updLibInfo();
+  return n;
+}
+function setBarText(i,text){                     // replace the chord tokens of bar i in the source
+  const b=BARS[i]; if(!b||!b.pos.length) return false;
+  const a=b.pos[0][0], z=b.pos[b.pos.length-1][1]; S.src=S.src.slice(0,a)+text+S.src.slice(z); return true;
+}
+function applyLibrary(){                         // fill every not-yet-confirmed bar whose chords are all known
+  if(!TOKLIB.length||BARS.length!==BARGEO.length) return 0;
+  const jobs=[];
+  BARGEO.forEach((g,i)=>{
+    if(!g.toks||!g.toks.length) return;
+    const b=BARS[i]; if(!b||!(b.chords.join(' ')==='?'||UNVER.has(i))) return;
+    const m=g.toks.map(sg=>lookup(sg)); if(m.some(x=>!x)) return;
+    const text=m.map(x=>x.text).join(' '); if(text!==b.chords.join(' ')) jobs.push([i,text]);
+  });
+  jobs.sort((a,b)=>b[0]-a[0]);                   // from the end so earlier positions stay valid
+  for(const [i,t] of jobs) setBarText(i,t);
+  if(jobs.length){ S.breaks=S.breaks; render(); jobs.forEach(([i])=>UNVER.set(i,'high')); render(); }
+  return jobs.length;
 }
 
 // ---------- events ----------
