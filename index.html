@@ -756,8 +756,19 @@ function pageAccTypes(raw){
   }
   return out;
 }
+function hasTriangle(t,capH){           // hollow triangle (major 7th) among the pieces of a chord symbol
+  return (t.parts||[]).some(p=>{ const w=p.b-p.a+1, h=p.d-p.c+1; if(h<0.4*capH||h>0.9*capH||w<0.6*h||w>1.6*h) return false;
+    if(p.pts.length>0.6*w*h) return false;
+    const rows=new Map(); p.pts.forEach(([x,y])=>rows.set(y,(rows.get(y)||0)+1));
+    const bottom=Math.max(rows.get(p.d)||0,rows.get(p.d-1)||0), top=Math.max(rows.get(p.c)||0,rows.get(p.c+1)||0);
+    return bottom>=0.75*w && top<=0.45*w; });
+}
 function fixBar(i,chords,ptype){
   const g=BARGEO[i]; if(!g||!g.toks||!chords.length) return chords;
+  if(g.toks.some(t=>t.tri)){            // OCR reads the triangle as "A": "E A7" -> "Emaj7"
+    const out=[]; for(let k=0;k<chords.length;k++){ if(/^[A-G][#b]?$/.test(chords[k]) && /^A7?$/.test(chords[k+1]||'')){ out.push(chords[k]+'maj7'); k++; } else out.push(chords[k]); }
+    chords=out;
+  }
   const add=(c,a)=>{ const m=/^([A-G])([#b]?)(.*)$/.exec(c); if(!a||!m||m[2]) return c; return m[1]+(ptype||a)+m[3]; };
   const exp=g.toks.reduce((n,t)=>n+(t.stack?2:1),0);
   if(g.toks.some(t=>t.stack) && !chords.some(c=>c.includes('/')) && exp===chords.length){
@@ -796,6 +807,16 @@ function accidentalOf(t,capH){
       if(stems===1) return 'b';
       return '#';
     }
+  }
+  if(capH){
+    const H=root.d-root.c+1, x0=Math.round(root.b-0.45*capH), runs=new Map();
+    const byCol=new Map(); root.pts.forEach(([x,y])=>{ if(x>=x0){ (byCol.get(x)||byCol.set(x,[]).get(x)).push(y); } });
+    let groups=0, run=false;
+    for(let x=x0;x<=root.b;x++){ const ys=(byCol.get(x)||[]).sort((a,b)=>a-b); let best=0,cur=0,prev=-9,start=0,bestStart=0;
+      ys.forEach(y=>{ if(y===prev+1) cur++; else { cur=1; start=y; } prev=y; if(cur>best){ best=cur; bestStart=start; } });
+      // a sharp starts at the top of the letter; the legs of an "m" start half-way down
+      const tall=best>=0.55*H && H>=0.8*capH && bestStart<=root.c+0.25*H; if(tall&&!run) groups++; run=tall; }
+    if(groups>=2 && (root.b-root.a+1)>0.85*capH) return '#';
   }
   const H=capH||H0;
   for(const p of parts.slice(1)){
@@ -891,7 +912,8 @@ async function readImageURLs(urls){
           return {a:f.a,b:f.b,c:top,d:f.d+y0}; });
         let cs=comps.filter(c=>!frames.includes(c)&&!frames.some(B=>c.a>=B.a&&c.b<=B.b&&c.c>=B.c&&c.d<=B.d)&&c.n>=3&&(c.b-c.a)<8*q).sort((a,b)=>a.a-b.a);
         const merged=[];
-        for(const c of cs){ const m=merged.find(t=>{ const ov=Math.min(t.b,c.b)-Math.max(t.a,c.a); return ov>0.5*Math.min(t.b-t.a+1,c.b-c.a+1)&&(Math.max(t.c,c.c)-Math.min(t.d,c.d))<0.6*q; });
+        const dotLike=c=>(c.b-c.a+1)<=0.5*q&&(c.d-c.c+1)<=0.5*q;
+        for(const c of cs){ const m=merged.find(t=>{ const ov=Math.min(t.b,c.b)-Math.max(t.a,c.a); return ov>0.5*Math.min(t.b-t.a+1,c.b-c.a+1)&&(Math.max(t.c,c.c)-Math.min(t.d,c.d))<0.6*q&&(dotLike(c)||dotLike(t)); });
           if(m){ m.a=Math.min(m.a,c.a); m.b=Math.max(m.b,c.b); m.c=Math.min(m.c,c.c); m.d=Math.max(m.d,c.d); m.pts=m.pts.concat(c.pts); } else merged.push({...c,pts:c.pts.slice()}); }
         const toks=[];
         for(const c of merged){ const t=toks[toks.length-1];
@@ -936,6 +958,7 @@ async function readImageURLs(urls){
     tk.forEach(t=>{ const st=splitStack(t._t,capH);
       if(st){ t.stack=true; t.acc=accidentalOf({parts:st.top},capH); t.accB=accidentalOf({parts:st.bot},capH); }
       else { t.acc=accidentalOf(t._t,capH); t.accB=''; }
+      t.tri=hasTriangle(t._t,capH);
       delete t._t; });
   }
   clusterBars(geo);
