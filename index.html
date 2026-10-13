@@ -167,6 +167,8 @@ button:active{transform:translateY(1px)}
       <h2>③ レイアウト</h2>
       <label>1段あたりの小節数</label>
       <div class="seg" id="perRow"></div>
+      <button id="relayout" style="margin-top:8px;width:100%"></button>
+      <div class="hint">手動で変えた段の区切りやセクションの改行をすべて消して、最初から並べ直します。</div>
       <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="manualCb">
         段の区切りを手動にする(小節をクリックして調整)</label>
       <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="breakSec" checked>
@@ -357,6 +359,7 @@ function render(){
   $('degNote').textContent = S.disp!=='name' ? `「元のキー」(${S.from}${S.mode==='min'?'m':''})を Ⅰ として表示。移調しても変わりません。転調する曲では、転調後はキー基準のままです。` : '';
   $('subWrap').style.display = S.disp==='name' ? '' : 'none'; $('sub').value=S.sub;
   $('manualCb').checked=S.manual;
+  $('relayout').textContent=`全部の段を ${S.per} 小節ずつに並べ直す`;
   $('breakSec').checked=S.breakSec;
   $('fs').value=S.fs; $('fsv').textContent=S.fs+'px';
   $('gap').value=S.gap; $('gapv').textContent=S.gap+'px';
@@ -516,6 +519,7 @@ $('down').onclick=()=>{S.shift=((S.shift-1+5+12)%12)-5; render();};
 $('reset').onclick=()=>{S.shift=0; render();};
 $('perRow').onclick=e=>{ if(e.target.dataset.n){S.per=+e.target.dataset.n; render();} };
 $('disp').onclick=e=>{ if(e.target.dataset.d){S.disp=e.target.dataset.d; render();} };
+$('relayout').onclick=()=>{ S.manual=false; S.breaks=[]; S.breakSec=false; SEL=null; SELCH=null; render(); };
 $('manualCb').onchange=e=>{ if(e.target.checked) freezeLayout(); else { S.manual=false; S.breaks=[]; } render(); };
 $('sub').onchange=e=>{S.sub=e.target.value; render();};
 $('breakSec').onchange=e=>{S.breakSec=e.target.checked; render();};
