@@ -110,9 +110,20 @@ button:active{transform:translateY(1px)}
 .sd{font-size:.6em;font-weight:500;color:var(--sub);letter-spacing:0}
 .sd small{font-size:.7em;vertical-align:.25em;font-weight:500}
 @page{size:A4;margin:12mm}
+.viewWrap{display:grid;gap:14px}
+.viewWrap.v-chart #origPane,.viewWrap.v-orig #chartPane{display:none}
+@media (min-width:1100px){ .viewWrap.v-split{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} }
+#origPane{min-width:0}
+.viewWrap.v-split #origPane,.viewWrap.v-orig #origPane{position:sticky;top:8px;align-self:start;max-height:calc(100vh - 24px);overflow:auto;
+  border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg)}
+.orow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;margin-bottom:8px}
+#origImgs img{display:block;margin:0 auto 10px;max-width:none;border:1px solid var(--border);background:#fff}
 .line{break-inside:avoid}
 .export-clone{position:fixed;left:-10000px;top:0;width:760px;background:#fff;color:#000;padding:0}
 @media print{
+  #origPane,#viewTabs{display:none !important}
+  .viewWrap{display:block !important}
+  .viewWrap.v-orig #chartPane{display:block !important}
   .bar.sel .cr{background:none}.bar.sel .st{outline:none}
   .barbar,.nosel-hint{display:none}
   body{background:#fff;color:#000}
@@ -197,6 +208,10 @@ button:active{transform:translateY(1px)}
   </div>
 
   <div class="panel" id="sheetPanel">
+  <div class="seg ctrl" id="viewTabs" hidden style="margin-bottom:10px">
+    <button data-v="chart">譜面</button><button data-v="split">並べて見る</button><button data-v="orig">原本(PDF)</button>
+  </div>
+  <div class="viewWrap v-chart" id="viewWrap"><div id="chartPane">
   <div class="nosel-hint ctrl" id="selHint">小節をクリックすると選べます(段の入れ替えができます)</div>
   <div class="barbar ctrl" id="barBar" hidden>
     <span class="msg" id="barMsg"></span>
@@ -218,6 +233,12 @@ button:active{transform:translateY(1px)}
   </div>
   <div id="sheet">
     <div id="title"></div><div id="meta"></div><div id="chart"></div>
+  </div></div>
+  <div id="origPane">
+    <div class="orow ctrl"><b>原本(読み込んだPDF)</b>
+      <span>拡大 <input type="range" id="oz" min="40" max="200" value="100"></span>
+      <button id="oClear">原本を消す</button></div>
+    <div id="origImgs"></div>
   </div></div>
 </div>
 
@@ -333,6 +354,7 @@ const S = {
   shift: store.get('shift',0),
   per:   store.get('per',4),
   manual: store.get('manual',false),
+  view:  store.get('view','chart'),
   breakSec: store.get('breakSec',true),
   fs:    store.get('fs',24),
   gap:   store.get('gap',18),
@@ -431,6 +453,7 @@ function render(){
     el.appendChild(grid); sheet.appendChild(el);
   }
   updateBarBar();
+  applyView();
 }
 
 
@@ -553,13 +576,14 @@ function splitChords(str){            // "CmG7" -> ["Cm","G7"]
 async function readPdf(file){
   await loadPdfJs();
   const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
-  const rows=[]; let title='', firstChord=null, nChords=0;
+  const rows=[], pages=[]; let title='', firstChord=null, nChords=0;
   for(let pn=1; pn<=pdf.numPages; pn++){
     const page=await pdf.getPage(pn), SC=2, vp=page.getViewport({scale:SC});
     const W=Math.ceil(vp.width), H=Math.ceil(vp.height);
     const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
     const ctx=cv.getContext('2d',{willReadFrequently:true}); ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
     await page.render({canvasContext:ctx,viewport:vp}).promise;
+    pages.push(cv.toDataURL('image/jpeg',0.82));
     const px=ctx.getImageData(0,0,W,H).data;
     const dark=(x,y)=>{const i=(y*W+x)*4; return px[i]<110&&px[i+1]<110&&px[i+2]<110;};
     // 1) staves: long horizontal dark lines, grouped
@@ -635,7 +659,7 @@ async function readPdf(file){
       rows.push(parts.join(' | ')+' |');
     }
   }
-  return {rows,title,firstChord,nChords};
+  return {rows,title,firstChord,nChords,pages};
 }
 function guessKey(ch){
   const c=parseChord(ch); if(!c) return 'C';
@@ -652,11 +676,35 @@ $('pdfIn').onchange=async e=>{
     if(!r.nChords) throw new Error('コードを見つけられませんでした(画像だけのPDFは読み取れません)');
     Object.assign(S,{src:r.rows.join('\n'), from:guessKey(r.firstChord), mode:'maj', shift:0, breaks:[], manual:false});
     if(r.title) S.title=r.title;
-    SEL=null; SELCH=null; render();
-    msg.textContent=`読み取りました: ${r.nChords} コード、${r.rows.length} 段。違うところは、コードをクリックして直してください(Enter で次のコードへ進みます)。元のキーは自動で推測した値です。`;
+    SEL=null; SELCH=null; setPages(r.pages); S.view='split'; renderOrig(); render();
+    msg.textContent=`読み取りました: ${r.nChords} コード、${r.rows.length} 段。違うところは、コードをクリックして直してください(Enter で次のコードへ進みます)。右(下)に原本を並べています。元のキーは自動で推測した値です。`;
   }catch(err){ msg.textContent=''; alert('PDFを読み取れませんでした: '+err.message); }
   finally{ btn.disabled=false; btn.textContent=label; }
 };
+
+// ---------- original PDF pages (kept in this browser only) ----------
+let PAGES=[];
+const idb={
+  open(){ return new Promise((res,rej)=>{ const r=indexedDB.open('chordchart',1);
+    r.onupgradeneeded=()=>r.result.createObjectStore('kv'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); },
+  async get(k){ const db=await this.open(); return new Promise((res,rej)=>{ const q=db.transaction('kv').objectStore('kv').get(k); q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }); },
+  async set(k,v){ const db=await this.open(); return new Promise((res,rej)=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); }); }
+};
+function setPages(arr){ PAGES=arr||[]; idb.set('pages',PAGES).catch(()=>{}); }
+function renderOrig(){
+  const box=$('origImgs'); box.innerHTML='';
+  PAGES.forEach((u,i)=>{ const im=new Image(); im.src=u; im.alt=`原本 ${i+1}ページ`; im.style.width=$('oz').value+'%'; box.appendChild(im); });
+}
+function applyView(){
+  if(!PAGES.length && S.view!=='chart') S.view='chart';
+  $('viewTabs').hidden=!PAGES.length;
+  $('viewWrap').className='viewWrap v-'+S.view;
+  [...$('viewTabs').children].forEach(b=>b.classList.toggle('on',b.dataset.v===S.view));
+}
+$('viewTabs').onclick=e=>{ if(e.target.dataset.v){ S.view=e.target.dataset.v; render(); } };
+$('oz').oninput=()=>[...$('origImgs').children].forEach(im=>im.style.width=$('oz').value+'%');
+$('oClear').onclick=()=>{ if(!confirm('読み込んだ原本の画像を消しますか?(譜面は消えません)')) return; setPages([]); S.view='chart'; renderOrig(); render(); };
+idb.get('pages').then(p=>{ if(p&&p.length){ PAGES=p; renderOrig(); render(); } }).catch(()=>{});
 
 // ---------- events ----------
 $('songSel').onchange=e=>{ const g=SONGS[e.target.value]; if(!g) return;
