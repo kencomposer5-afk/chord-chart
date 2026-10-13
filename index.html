@@ -74,6 +74,13 @@ button:active{transform:translateY(1px)}
              radial-gradient(circle at 4px 62.5%,var(--line) 1.8px,transparent 2.3px)}
 .st.rs::before{left:3px} .st.re::after{right:3px}
 .bar.pad{visibility:hidden}
+.tsig{position:absolute;left:calc(var(--sp) * .7);top:0;height:100%;display:flex;flex-direction:column;
+  align-items:center;font-weight:800;color:var(--line);z-index:1;min-width:calc(var(--sp) * 1.6)}
+.tsig span{display:block;height:50%;font-size:calc(var(--sp) * 3);line-height:calc(var(--sp) * 2);
+  font-family:Georgia,"Times New Roman",serif}
+.tsig .cc{height:100%;font-family:"NotoMusic","Noto Music",serif;font-weight:400;font-size:calc(var(--sp) * 4.6);line-height:calc(var(--sp) * 4)}
+.st.rs .tsig{left:calc(var(--sp) * 2)}
+.bar.hasts .cr{padding-left:calc(var(--sp) * 3.6)}
 .bar:not(.pad){cursor:pointer}
 .bar:not(.pad):hover .cr{background:rgba(47,111,237,.07);border-radius:4px}
 .tok{cursor:pointer;border-radius:4px}
@@ -225,11 +232,11 @@ B F# G#m D#m | E | F# F#sus4 | F# :| 2. C#m7 C#7 | F#sus4 F# |
 E F# | B F# G#m D#m | E | F# F#sus4 | F# D.S. |
 E F# | B Fine`},
   sakura: {title:'桜', from:'B', mode:'maj', src:`
-[Intro] B F# | G#m D#m | E F# | B F# | G#m D#m | E (2/4) |
-[A] F# F#sus4 | F# | B | G#m | D#m | E F# |
-B | G#m | D#m | E F# | E F# | B F# |
+[Intro] B F# | G#m D#m | E F# | B F# | G#m D#m | (2/4) E |
+[A] (4/4) F# F#sus4 | F# | B | G#m | D#m | E F# |
+B | G#m | D#m | (3/4) E F# | (4/4) E F# | B F# |
 [B] |: B | G#m | D#m | E F# | B | A#m7(b5) D#7 |
-[C] G#m | E F# | E F# | B |
+[C] G#m | (3/4) E F# | (4/4) E F# | B |
 [D] G | D | G A G | F#7 Bm A | G | F#m7 | G | F# E F# |
 [E] B | F# | G#m | D#m7 | E | B |
 C#m7 C#7 | F#sus4 F# | B | F# | G#m | D#m7 |
@@ -293,6 +300,7 @@ function parse(text){
     else if (t==='|:'){ flush(); pendStart=true; }
     else if (t===':|'){ if(cur.chords.length){cur.re=true;} else if(bars.length){bars[bars.length-1].re=true;} flush(); }
     else if (/^\[.+\]$/.test(t)){ flush(); pendLabel=t.slice(1,-1); }
+    else if (/^\(\d{1,2}\/\d{1,2}\)$/.test(t)){ cur.ts=t.slice(1,-1); }   // time signature, e.g. (2/4)
     else {
       if (!cur.chords.length){
         if (pendLabel){cur.label=pendLabel; pendLabel=null;}
@@ -405,6 +413,11 @@ function render(){
         cr.appendChild(sp);
       });
       const st=document.createElement('div'); st.className='st'+(b.rs?' rs':'')+(b.re?' re':'');
+      if (b.ts){
+        const [n,dn]=b.ts.split('/'), ts=document.createElement('div'); ts.className='tsig';
+        ts.innerHTML = (n==='4'&&dn==='4') ? '<span class="cc">\u{1D134}</span>' : `<span>${n}</span><span>${dn}</span>`;
+        st.appendChild(ts); d.classList.add('hasts');
+      }
       d.appendChild(cr); d.appendChild(st); grid.appendChild(d);
     }
     for (let i=ln.length;i<cols;i++){ const p=document.createElement('div'); p.className='bar pad';
