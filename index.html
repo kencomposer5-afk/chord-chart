@@ -858,6 +858,19 @@ async function finishImageImport(r,msg){
   SEL=null; SELCH=null; setPages(r.pages,r.geo); layoutFromGeo(); S.view='split'; renderOrig(); render();
   const q=document.querySelector('.bar .tok'); if(q) q.click();
   const nb=r.rows.reduce((a,x)=>a+x.split('|').length-1,0);
+  if(await florenceAvailable()){      // Florence-2 reader is running on this computer: best measured accuracy
+    try{
+      msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。Florence-2 で読み取り中…`;
+      let meta=null;
+      try{ if(NATIVE_VISION()){ const d=await window.webkit.messageHandlers.vision.postMessage({image:PAGES[0]}); meta=metaFromItems((d.items||[]),BARGEO[0].c0); } else meta=await detectMeta(); }catch(e){}
+      if(meta&&meta.title){ S.title=meta.title; S.credit=meta.credit||''; }
+      const {res,conf}=await autoReadFlorence((i,n)=>{ msg.textContent=`Florence-2 で読み取り中… ${i+1}/${n} 小節`; });
+      skeletonFromGeo(); applyOcr(res,conf); applyLibrary(); autoKey(); render();
+      const got=res.filter(x=>x!=='?').length;
+      msg.textContent=`${r.rows.length} 段、${nb} 小節。Florence-2 で ${got} 小節にコードを入れました(合っているのは約7割の見込み)。原本の拡大を見ながら、違うところは、コードをクリックして直してください(直した見た目は覚えます)。`;
+      return;
+    }catch(err){ msg.textContent=`Florence-2 での読み取りに失敗したので、ほかの方法に切り替えます(${err&&err.message||err})`; }
+  }
   if(NATIVE_VISION()){        // running inside the Mac app: use Apple's Vision text recognition
     try{
       msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。Macの文字認識(Vision)で読み取り中…`;
@@ -1193,6 +1206,37 @@ function applyLibrary(){                         // fill every not-yet-confirmed
   for(const [i,t] of jobs) setBarText(i,t);
   if(jobs.length){ S.breaks=S.breaks; render(); jobs.forEach(([i])=>UNVER.set(i,'high')); render(); }
   return jobs.length;
+}
+
+// ---------- Florence-2 reader running on this computer (tools/florence-server.py, free / open source) ----------
+const FLORENCE='http://localhost:8765';
+async function florenceAvailable(){
+  try{ const c=new AbortController(); const t=setTimeout(()=>c.abort(),900); const r=await fetch(FLORENCE+'/ping',{signal:c.signal}); clearTimeout(t); return r.ok; }
+  catch(e){ return false; }
+}
+function cropRaw(im,g){              // the chord row of one bar, enlarged, as it is (no black/white conversion)
+  const m=4, sx=Math.max(0,Math.round(g.x0+m)), sw=Math.round(g.x1-g.x0-2*m), sy=Math.max(0,Math.round(g.c0)), sh=Math.round(g.c1-g.c0);
+  if(sw<8||sh<8) return null;
+  const k=Math.max(1,136/sh), cv=document.createElement('canvas'); cv.width=Math.round(sw*k)+40; cv.height=Math.round(sh*k)+40;
+  const c=cv.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height); c.imageSmoothingQuality='high';
+  c.drawImage(im,sx,sy,sw,sh,20,20,Math.round(sw*k),Math.round(sh*k));
+  return cv;
+}
+async function autoReadFlorence(onProgress){
+  const imgs={}, res=[], conf=[], n=BARGEO.length;
+  for(let i=0;i<n;i++){
+    onProgress&&onProgress(i,n);
+    const g=BARGEO[i]; let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
+    const cv=cropRaw(im,g); let ch=[];
+    if(cv){
+      const r=await fetch(FLORENCE+'/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:cv.toDataURL('image/png')})});
+      const j=await r.json(); if(j.error) throw new Error(j.error);
+      for(const w of (j.text||'').split(/\s+/)) for(const x of splitChords(cleanTxt(w))) if(parseChord(x)) ch.push(x);
+    }
+    ch=fixAccidentals(i,ch);
+    res.push(ch.length?ch.join(' '):'?'); conf.push(ch.length?70:0);
+  }
+  return {res,conf};
 }
 
 // ---------- events ----------
