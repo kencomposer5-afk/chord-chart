@@ -881,9 +881,18 @@ async function applyVisionJson(files){
       if(cx<g.x0-2||cx>g.x1+2||cy<g.c0-0.8*q||cy>g.c1+1.0*q) continue;
       its.push(o);
     }
-    its.sort((a,b)=>Math.abs(a.y-b.y)>a.h*0.5?a.y-b.y:a.x-b.x);
+    // chords written as a fraction (chord over bass note) -> "Dm7/G"
+    const clean=t=>t.replace(/♭/g,'b').replace(/♯/g,'#').replace(/[△Δ]/g,'maj').replace(/[\s\u3000]/g,'');
+    for(let a=0;a<its.length;a++){ const A=its[a]; if(A.used) continue;
+      for(let b=0;b<its.length;b++){ const B=its[b]; if(a===b||B.used||A.used) continue;
+        const ca=A.x+A.w/2, cb=B.x+B.w/2, tb=clean(B.t);
+        if(Math.abs(ca-cb)<0.7*Math.max(A.w,B.w) && B.y-A.y>0.6*Math.min(A.h,B.h) && B.y-A.y<2.2*Math.max(A.h,B.h)
+           && /^[A-G][#b]?$/.test(tb) && splitChords(clean(A.t)).length===1 && parseChord(clean(A.t))){
+          A.t=clean(A.t)+'/'+tb; A.h=B.y+B.h-A.y; A.w=Math.max(A.w,B.w); B.used=true; } } }
+    const merged=its.filter(o=>!o.used);
+    merged.sort((a,b)=>Math.abs(a.y-b.y)>a.h*0.5?a.y-b.y:a.x-b.x);
     const ch=[];
-    for(const o of its){
+    for(const o of merged){
       const t=o.t.replace(/♭/g,'b').replace(/♯/g,'#').replace(/[△Δ]/g,'maj').replace(/[\s　]/g,'');
       for(const x of splitChords(t)){ if(!parseChord(x)) continue;
         if(x.length===1&&/[A-H]/.test(x)&&await boxedItem(im,o,q)) continue;
