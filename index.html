@@ -120,7 +120,9 @@ button:active{transform:translateY(1px)}
 .viewWrap.v-split #origPane,.viewWrap.v-orig #origPane{position:sticky;top:8px;align-self:start;max-height:calc(100vh - 24px);overflow:auto;
   border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg)}
 .orow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;margin-bottom:8px}
-#origImgs img{display:block;margin:0 auto 10px;max-width:none;border:1px solid var(--border);background:#fff}
+#origImgs .pg{position:relative;margin:0 auto 10px}
+#origImgs img{display:block;width:100%;max-width:none;border:1px solid var(--border);background:#fff}
+#origImgs .mark{position:absolute;border:3px solid #ff6a00;background:rgba(255,140,0,.18);border-radius:4px;pointer-events:none;box-shadow:0 0 0 2px rgba(255,255,255,.7)}
 .line{break-inside:avoid}
 .export-clone{position:fixed;left:-10000px;top:0;width:760px;background:#fff;color:#000;padding:0}
 @media print{
@@ -152,6 +154,12 @@ button:active{transform:translateY(1px)}
         <button id="saveFile">💾 ファイルに保存</button>
         <button id="loadFile">📂 ファイルを開く</button>
         <button id="loadPdf">📄 PDF・画像を読み込む</button>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <button id="libSave" title="この譜面(原本の画像も含む)を、このブラウザの中に保存します">📚 ブラウザに保存</button>
+        <select id="libSel" style="flex:1;min-width:8em"></select>
+        <button id="libOpen">開く</button>
+        <button id="libDel">削除</button>
         <button id="loadOcr" title="Macの文字認識(Vision)の結果を読み込む">🧾 Mac認識結果(JSON)</button>
         <input id="ocrIn" type="file" multiple accept=".json,application/json" style="display:none">
         <input id="pdfIn" type="file" multiple accept=".pdf,application/pdf,image/png,image/jpeg,image/webp" style="display:none">
@@ -530,14 +538,14 @@ function setBreaks(fn){ freezeLayout(); const set=new Set(S.breaks); fn(set);
   S.breaks=[...set].filter(x=>x>0&&x<NBARS).sort((a,b)=>a-b); render(); }
 function updateBarBar(){
   const bb=$('barBar'); bb.hidden = SEL===null; $('selHint').style.display = SEL===null ? '' : 'none';
-  if (SEL===null) return;
+  if (SEL===null){ markOrig(); return; }
   const {first,last}=lineInfo(SEL);
   $('barMsg').textContent=`${SEL+1}小節目を選択中`;
   $('bUp').disabled   = !(first && SEL>0);
   $('bDown').disabled = !(last && SEL<NBARS-1);
   $('bSplit').disabled= first;
   $('bJoin').disabled = !(first && SEL>0);
-  drawLens();
+  drawLens(); markOrig();
   const ce=$('chEdit'); ce.style.display = SELCH===null ? 'none' : 'flex';
   if (SELCH!==null){ const t=BARS[SEL].chords[SELCH]; if(document.activeElement!==$('chIn')) $('chIn').value=dispTok(t); $('chIn').dataset.k=SEL+':'+SELCH; }
 }
@@ -700,6 +708,60 @@ function strokesOf(pts,x0,x1,y0,y1){        // number of upright strokes in a bo
   for(let x=x0;x<=x1;x++){ const tall=(n.get(x)||0)>=0.6*h; if(tall&&!run) s++; run=tall; }
   return s;
 }
+function piecesOf(pts){            // connected pieces of a set of pixels
+  const key=(x,y)=>x+','+y, set=new Set(pts.map(([x,y])=>key(x,y))), seen=new Set(), out=[];
+  for(const [x,y] of pts){ const k0=key(x,y); if(seen.has(k0)) continue;
+    const st=[[x,y]], pp=[]; seen.add(k0); let a=x,b=x,c=y,d=y;
+    while(st.length){ const [cx,cy]=st.pop(); pp.push([cx,cy]); if(cx<a)a=cx; if(cx>b)b=cx; if(cy<c)c=cy; if(cy>d)d=cy;
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ const k=key(cx+dx,cy+dy); if(set.has(k)&&!seen.has(k)){ seen.add(k); st.push([cx+dx,cy+dy]); } } }
+    out.push({a,b,c,d,pts:pp}); }
+  return out;
+}
+function splitStack(t,capH){        // "F#" over a line over "A#": returns {top, bot} pieces, or null
+  if(!capH||t.d-t.c+1<capH*1.6) return null;
+  const w=t.b-t.a+1, rows=new Map(); t.pts.forEach(([x,y])=>rows.set(y,(rows.get(y)||0)+1));
+  const h=t.d-t.c+1; let line=null;
+  for(let y=Math.round(t.c+h*0.3);y<=t.c+h*0.75;y++){ if((rows.get(y)||0)>=Math.max(0.55*w,0.6*capH)){ if(!line) line={a:y,b:y}; else if(y-line.b<=1) line.b=y; } }
+  if(!line||line.b-line.a>3) return null;
+  const top=t.pts.filter(([x,y])=>y<line.a), bot=t.pts.filter(([x,y])=>y>line.b);
+  if(top.length<10||bot.length<10) return null;
+  const keep=p=>p.pts.length>=5&&(p.d-p.c+1)>=3;                     // drop crumbs of the line
+  const T=piecesOf(top).filter(keep), B=piecesOf(bot).filter(keep);
+  const frame=p=>{ const w=p.b-p.a+1, h=p.d-p.c+1; return (w>=1.3*capH && h>=0.9*capH && p.pts.length<0.5*w*h) || (w<=0.25*capH && h>=1.2*capH); };   // a boxed section label (or its side lines)
+  if(T.some(frame)||B.some(frame)) return null;
+  return {top:T, bot:B};
+}
+// one kind of sign per page: the explicit signs the OCR did read decide, else the signs found in the picture
+function pageAccTypes(raw){
+  const out={};
+  const pages=[...new Set(BARGEO.map(g=>g.p))];
+  for(const p of pages){
+    let sh=0,fl=0,dsh=0,dfl=0;
+    BARGEO.forEach((g,i)=>{ if(g.p!==p) return;
+      (raw[i]||[]).forEach(c=>{ const m=/^[A-G]([#b])/.exec(c); if(m){ if(m[1]==='#') sh++; else fl++; } });
+      (g.toks||[]).forEach(t=>{ [t.acc,t.accB].forEach(a=>{ if(a==='#') dsh++; else if(a==='b') dfl++; }); }); });
+    const n=sh+fl;
+    out[p]= n>=2&&Math.max(sh,fl)/n>=0.7 ? (sh>fl?'#':'b') : (dsh+dfl? (dsh>=dfl?'#':'b') : '');
+  }
+  return out;
+}
+function fixBar(i,chords,ptype){
+  const g=BARGEO[i]; if(!g||!g.toks||!chords.length) return chords;
+  const add=(c,a)=>{ const m=/^([A-G])([#b]?)(.*)$/.exec(c); if(!a||!m||m[2]) return c; return m[1]+(ptype||a)+m[3]; };
+  const exp=g.toks.reduce((n,t)=>n+(t.stack?2:1),0);
+  if(g.toks.some(t=>t.stack) && !chords.some(c=>c.includes('/')) && exp===chords.length){
+    const out=[]; let k=0;
+    for(const t of g.toks){
+      if(t.stack){ const top=add(chords[k],t.acc), bm=/^([A-G])([#b]?)/.exec(chords[k+1]||'');
+        const bass=bm? bm[1]+(bm[2]||(t.accB?(ptype||t.accB):'')) : '';
+        out.push(bass? top+'/'+bass : top); k+=2; }
+      else { out.push(add(chords[k],t.acc)); k++; }
+    }
+    return out;
+  }
+  if(g.toks.length===chords.length) return chords.map((c,k)=>add(c,g.toks[k].acc));
+  return chords;
+}
 // OCR often drops the small raised sharp/flat: put back the ones found in the picture (when chords and symbols line up 1:1)
 function fixAccidentals(i,chords){
   const g=BARGEO[i]; if(!g||!g.toks||g.toks.length!==chords.length) return chords;
@@ -836,7 +898,10 @@ async function readImageURLs(urls){
   for(let pg=0;pg<pages.length;pg++){
     const tk=geo.filter(g=>g.p===pg).flatMap(g=>g.toks), hs=tk.map(t=>{ const r=t._t.parts.slice().sort((a,b)=>a.a-b.a)[0]; return r.d-r.c+1; }).sort((a,b)=>a-b);
     const capH=hs.length? hs[Math.floor(hs.length*0.4)] : 0;
-    tk.forEach(t=>{ t.acc=accidentalOf(t._t,capH); delete t._t; });
+    tk.forEach(t=>{ const st=splitStack(t._t,capH);
+      if(st){ t.stack=true; t.acc=accidentalOf({parts:st.top},capH); t.accB=accidentalOf({parts:st.bot},capH); }
+      else { t.acc=accidentalOf(t._t,capH); t.accB=''; }
+      delete t._t; });
   }
   clusterBars(geo);
   return {rows,pages,geo};
@@ -938,7 +1003,18 @@ const idb={
 function setPages(arr,geo){ PAGES=arr||[]; BARGEO=geo||[]; idb.set('pages',PAGES).catch(()=>{}); idb.set('bargeo',BARGEO).catch(()=>{}); }
 function renderOrig(){
   const box=$('origImgs'); box.innerHTML='';
-  PAGES.forEach((u,i)=>{ const im=new Image(); im.src=u; im.alt=`原本 ${i+1}ページ`; im.style.width=$('oz').value+'%'; box.appendChild(im); });
+  PAGES.forEach((u,i)=>{ const pg=document.createElement('div'); pg.className='pg'; pg.style.width=$('oz').value+'%';
+    const im=new Image(); im.src=u; im.alt=`原本 ${i+1}ページ`; im.onload=()=>markOrig(); pg.appendChild(im); box.appendChild(pg); });
+}
+function markOrig(){               // orange box on the original page around the selected bar
+  document.querySelectorAll('#origImgs .mark').forEach(e=>e.remove());
+  const g=(SEL!==null&&BARGEO.length===NBARS)?BARGEO[SEL]:null; if(!g) return;
+  const pg=$('origImgs').children[g.p]; if(!pg) return; const im=pg.querySelector('img'); if(!im||!im.naturalWidth) return;
+  const W=im.naturalWidth, H=im.naturalHeight, top=Math.max(0,g.y0), bot=Math.min(H,g.y1+g.q*4);
+  const m=document.createElement('div'); m.className='mark';
+  m.style.left=(g.x0/W*100)+'%'; m.style.width=((g.x1-g.x0)/W*100)+'%'; m.style.top=(top/H*100)+'%'; m.style.height=((bot-top)/H*100)+'%';
+  pg.appendChild(m);
+  if(S.view!=='chart') m.scrollIntoView({block:'nearest',inline:'nearest'});
 }
 function applyView(){
   if(!PAGES.length && S.view!=='chart') S.view='chart';
@@ -947,7 +1023,7 @@ function applyView(){
   [...$('viewTabs').children].forEach(b=>b.classList.toggle('on',b.dataset.v===S.view));
 }
 $('viewTabs').onclick=e=>{ if(e.target.dataset.v){ S.view=e.target.dataset.v; render(); } };
-$('oz').oninput=()=>[...$('origImgs').children].forEach(im=>im.style.width=$('oz').value+'%');
+$('oz').oninput=()=>[...$('origImgs').children].forEach(pg=>pg.style.width=$('oz').value+'%');
 $('oClear').onclick=()=>{ if(!confirm('読み込んだ原本の画像を消しますか?(譜面は消えません)')) return; setPages([]); S.view='chart'; renderOrig(); render(); };
 idb.get('toklib').then(l=>{ if(l&&l.length){ TOKLIB=l; updLibInfo(); } }).catch(()=>{});
 idb.get('pages').then(async p=>{ if(p&&p.length){ PAGES=p; try{ BARGEO=(await idb.get('bargeo'))||[]; }catch(e){} renderOrig(); render(); } }).catch(()=>{});
@@ -1017,7 +1093,7 @@ const ocrWords=r=>{ const words=[]; (r.data.blocks||[]).forEach(bl=>bl.paragraph
 async function autoRead(onProgress){
   if(OCR_RUNNING) return 0; OCR_RUNNING=true;
   try{
-    const w=await getTess(), imgs={}, crops=[], n=BARGEO.length;
+    const w=await getTess(), imgs={}, crops=[], n=BARGEO.length, RAWC=[];
     for(let i=0;i<n;i++){
       const g=BARGEO[i]; let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
       crops.push(cropForOcr(im,g));
@@ -1032,9 +1108,10 @@ async function autoRead(onProgress){
     for(let i=0;i<n;i++){
       onProgress&&onProgress(n+i,n*2); let ch=one[i];
       if(crops[i]){ const two=wordsToChords(ocrWords(await w.recognize(crops[i],{},{blocks:true}))); if(two.some(x=>x.c.includes('/'))) ch=two; }
-      const fixed=fixAccidentals(i,ch.map(x=>x.c));
-      res.push(ch.length?fixed.join(' '):'?'); conf.push(ch.length?Math.min(...ch.map(x=>x.conf)):0);
+      RAWC[i]=ch.map(x=>x.c);
+      res.push(ch.length?RAWC[i].join(' '):'?'); conf.push(ch.length?Math.min(...ch.map(x=>x.conf)):0);
     }
+    { const ty=pageAccTypes(RAWC); RAWC.forEach((c,i)=>{ if(c&&c.length) res[i]=fixBar(i,c,ty[BARGEO[i].p]).join(' '); }); }
     window.OCR_LAST={one,res:res.slice(),conf:conf.slice()};
     // bars that look identical must hold the same chords: let every member of a cluster vote (weighted by confidence)
     const groups=new Map(); BARGEO.forEach((g,i)=>{ if(g.cl>=0){ (groups.get(g.cl)||groups.set(g.cl,[]).get(g.cl)).push(i); } });
@@ -1091,7 +1168,7 @@ async function applyVisionJson(files){
 }
 async function applyVisionData(data){        // data: one {width,height,items:[{t,x,y,w,h,c}]} per page
   if(!BARGEO.length||!PAGES.length) throw new Error('先にPNGを読み込んでください');
-  const imgs={}, res=[], conf=[];
+  const imgs={}, res=[], conf=[], RAWV=[];
   for(let gi=0;gi<BARGEO.length;gi++){ const g=BARGEO[gi];
     const d=data[Math.min(g.p,data.length-1)]; const q=g.q;
     let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
@@ -1110,9 +1187,10 @@ async function applyVisionData(data){        // data: one {width,height,items:[{
         if(x.length===1&&/[A-H]/.test(x)&&await boxedItem(im,o,q)) continue;
         ch.push(x); cmin=Math.min(cmin,o.conf==null?100:o.conf); }
     }
-    const fx=fixAccidentals(gi,ch);
-    res.push(ch.length?fx.join(' '):'?'); conf.push(ch.length?cmin:0);
+    RAWV[gi]=ch.slice();
+    res.push(ch.length?ch.join(' '):'?'); conf.push(ch.length?cmin:0);
   }
+  { const ty=pageAccTypes(RAWV); RAWV.forEach((c,i)=>{ if(c&&c.length) res[i]=fixBar(i,c,ty[BARGEO[i].p]).join(' '); }); }
   let meta=null; try{ const d0=data[0], g0=BARGEO[0]; if(d0&&g0){ const sy0=d0.height? PAGES.length&&(await new Promise(r=>{const i=new Image(); i.onload=()=>r(i.height/d0.height); i.src=PAGES[0];})) :1; meta=metaFromItems((d0.items||[]).map(it=>({t:it.t,x:it.x,y:it.y*sy0,w:it.w,h:it.h*sy0})),g0.c0); } }catch(e){}
   return {res,conf,meta};
 }
@@ -1223,7 +1301,7 @@ function cropRaw(im,g){              // the chord row of one bar, enlarged, as i
   return cv;
 }
 async function autoReadFlorence(onProgress){
-  const imgs={}, res=[], conf=[], n=BARGEO.length;
+  const imgs={}, res=[], conf=[], n=BARGEO.length, RAWF=[];
   for(let i=0;i<n;i++){
     onProgress&&onProgress(i,n);
     const g=BARGEO[i]; let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
@@ -1233,9 +1311,11 @@ async function autoReadFlorence(onProgress){
       const j=await r.json(); if(j.error) throw new Error(j.error);
       for(const w of (j.text||'').split(/\s+/)) for(const x of splitChords(cleanTxt(w))) if(parseChord(x)) ch.push(x);
     }
-    ch=fixAccidentals(i,ch);
+    RAWF[i]=ch;
     res.push(ch.length?ch.join(' '):'?'); conf.push(ch.length?70:0);
   }
+  const ty=pageAccTypes(RAWF); RAWF.forEach((c,i)=>{ if(c&&c.length) res[i]=fixBar(i,c,ty[BARGEO[i].p]).join(' '); });
+  window.OCR_LAST_F={raw:RAWF.map(c=>c.join(' ')),res:res.slice()};
   return {res,conf};
 }
 
@@ -1341,6 +1421,39 @@ $('copy').onclick=async()=>{
   catch(e){ $('src').value=exportText(); $('copy').textContent='テキスト欄に出力しました'; }
   setTimeout(()=>$('copy').textContent='移調後テキストをコピー',1800);
 };
+
+// ---------- songs kept inside this browser (IndexedDB) ----------
+let SONGLIB=[];
+function fillLibSel(){
+  const sel=$('libSel'); sel.innerHTML=`<option value="">保存した曲(${SONGLIB.length})…</option>`;
+  SONGLIB.slice().sort((a,b)=>b.at-a.at).forEach(e=>{ const o=document.createElement('option'); o.value=e.id;
+    o.textContent=`${e.title||'(無題)'} ― ${new Date(e.at).toLocaleDateString('ja-JP')}`; sel.appendChild(o); });
+}
+async function loadSongLib(){ try{ SONGLIB=(await idb.get('songlib'))||[]; }catch(e){ SONGLIB=[]; } fillLibSel(); }
+$('libSave').onclick=async()=>{
+  const title=(S.title||'').trim()||'(無題)';
+  let e=SONGLIB.find(x=>x.title===title);
+  if(e && !confirm(`「${title}」は、もう保存されています。上書きしますか?`)) return;
+  if(!e){ e={id:Date.now().toString(36)+Math.random().toString(36).slice(2,6)}; SONGLIB.push(e); }
+  const data={}; SAVE_KEYS.forEach(k=>data[k]=S[k]);
+  Object.assign(e,{title,at:Date.now(),data,pages:PAGES.slice(),geo:BARGEO});
+  try{ if(navigator.storage&&navigator.storage.persist) navigator.storage.persist().catch(()=>{});
+    await idb.set('songlib',SONGLIB); fillLibSel(); $('libSel').value=e.id;
+    $('importMsg').textContent=`「${title}」を、このブラウザに保存しました(${SONGLIB.length} 曲)。`; }
+  catch(err){ alert('保存できませんでした: '+err.message); }
+};
+$('libOpen').onclick=()=>{
+  const e=SONGLIB.find(x=>x.id===$('libSel').value); if(!e){ alert('開く曲を選んでください。'); return; }
+  SAVE_KEYS.forEach(k=>{ if(e.data[k]!==undefined) S[k]=e.data[k]; });
+  setPages(e.pages||[],e.geo||[]); SEL=null; SELCH=null; UNVER.clear(); S.view=PAGES.length?'split':'chart';
+  renderOrig(); render(); $('importMsg').textContent=`「${e.title}」を開きました。`;
+};
+$('libDel').onclick=async()=>{
+  const e=SONGLIB.find(x=>x.id===$('libSel').value); if(!e){ alert('削除する曲を選んでください。'); return; }
+  if(!confirm(`「${e.title}」を、ブラウザから削除しますか?`)) return;
+  SONGLIB=SONGLIB.filter(x=>x!==e); await idb.set('songlib',SONGLIB).catch(()=>{}); fillLibSel();
+};
+loadSongLib();
 render();
 if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script>
