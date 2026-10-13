@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>コード譜リレイアウト</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#2f6fed">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="コード譜">
+<style>
+:root{
+  --bg:#f6f5f1; --panel:#fff; --ink:#1d1d1f; --sub:#6b6b70; --line:#2b2b2e;
+  --accent:#2f6fed; --accent-ink:#fff; --border:#d9d7d0; --chord:#111;
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#17171a; --panel:#222226; --ink:#f0f0f2; --sub:#9a9aa2; --line:#cfcfd4;
+    --accent:#5b92ff; --accent-ink:#0b0b0d; --border:#3a3a40; --chord:#fff; }
+}
+:root.light{ --bg:#fff; --panel:#fff; --ink:#000; --sub:#555; --line:#000; --chord:#000; --border:#ccc; }
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font-family:-apple-system,"Hiragino Sans","Noto Sans JP",system-ui,sans-serif;line-height:1.5}
+header{padding:14px 16px 0}
+h1{font-size:18px;margin:0}
+.wrap{display:grid;grid-template-columns:minmax(300px,380px) 1fr;gap:16px;padding:16px;align-items:start}
+@media (max-width:820px){.wrap{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:14px}
+.panel h2{font-size:13px;margin:0 0 8px;color:var(--sub);font-weight:600}
+label{display:block;font-size:13px;margin:10px 0 4px}
+textarea{width:100%;min-height:260px;font:14px/1.5 ui-monospace,Menlo,Consolas,monospace;
+  background:var(--bg);color:var(--ink);border:1px solid var(--border);border-radius:8px;padding:8px;resize:vertical}
+input[type=text]{width:100%;font-size:15px;padding:6px 8px;background:var(--bg);color:var(--ink);
+  border:1px solid var(--border);border-radius:8px}
+select{font-size:15px;padding:6px 8px;background:var(--bg);color:var(--ink);border:1px solid var(--border);border-radius:8px}
+button{font-size:15px;padding:8px 12px;border-radius:8px;border:1px solid var(--border);
+  background:var(--panel);color:var(--ink);cursor:pointer}
+button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+button:active{transform:translateY(1px)}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.seg{display:flex;gap:4px;flex-wrap:wrap}
+.seg button{min-width:40px;padding:8px 10px}
+.seg button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.hint{font-size:12px;color:var(--sub);margin-top:6px}
+.shift{font-weight:700;min-width:3.5em;text-align:center}
+/* ---- chart ---- */
+#sheet{padding:18px 20px}
+#title{font-size:22px;font-weight:700;text-align:center;margin:0 0 4px}
+#meta{text-align:center;color:var(--sub);font-size:13px;margin-bottom:14px}
+@font-face{font-family:NotoMusic;src:url(vendor/noto-music.woff2) format('woff2')}
+.line{display:flex;align-items:stretch;margin:0 0 var(--gap,18px);position:relative}
+.sec{flex:0 0 3.2em;width:3.2em;align-self:flex-start;margin-top:0;border:1.5px solid var(--line);font-weight:700;
+  min-width:1.6em;text-align:center;padding:0 5px;margin-right:6px;font-size:.8em;line-height:1.5}
+.sec.empty{visibility:hidden;border-color:transparent}
+.bars{display:grid;flex:1}
+.bar{display:flex;flex-direction:column;min-width:0;font-size:var(--fs);font-weight:700;color:var(--chord);letter-spacing:.01em}
+.cr{flex:1;display:flex;flex-wrap:wrap;justify-content:space-around;align-items:flex-end;gap:.1em .5em;
+  min-height:calc(var(--fs) * 1.7);padding:0 8px 3px}
+.st,.head{height:calc(var(--sp) * 4);position:relative;
+  background:
+    linear-gradient(var(--line),var(--line)) 0 0/100% 1px no-repeat,
+    linear-gradient(var(--line),var(--line)) 0 25%/100% 1px no-repeat,
+    linear-gradient(var(--line),var(--line)) 0 50%/100% 1px no-repeat,
+    linear-gradient(var(--line),var(--line)) 0 75%/100% 1px no-repeat,
+    linear-gradient(var(--line),var(--line)) 0 100%/100% 1px no-repeat}
+.bar .st{border-right:2px solid var(--line)}
+.bars .bar:first-child .st{border-left:2px solid var(--line)}
+.st.rs{border-left:4px solid var(--line)}
+.st.re{border-right-width:5px}
+.st.rs::before,.st.re::after{content:"";position:absolute;top:0;bottom:0;width:8px;
+  background:radial-gradient(circle at 4px 37.5%,var(--line) 1.8px,transparent 2.3px),
+             radial-gradient(circle at 4px 62.5%,var(--line) 1.8px,transparent 2.3px)}
+.st.rs::before{left:3px} .st.re::after{right:3px}
+.bar.pad{visibility:hidden}
+.bar:not(.pad){cursor:pointer}
+.bar:not(.pad):hover .cr{background:rgba(47,111,237,.07);border-radius:4px}
+.bar.sel .cr{background:rgba(47,111,237,.18);border-radius:4px}
+.bar.sel .st{outline:2px solid var(--accent);outline-offset:2px}
+.barbar{position:sticky;top:0;z-index:5;display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+  background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:8px 10px;margin-bottom:12px;font-size:13px}
+.barbar button{padding:6px 10px;font-size:14px}
+.barbar button:disabled{opacity:.35;cursor:default}
+.barbar .msg{color:var(--sub);flex:1;min-width:8em}
+.nosel-hint{font-size:12px;color:var(--sub);margin:0 0 10px;text-align:center}
+.head{flex:0 0 auto;align-self:flex-end}
+.head .clef,.head .ka{position:absolute;font-family:"NotoMusic","Noto Music","Bravura",serif;font-weight:400;
+  color:var(--line);line-height:1;white-space:nowrap}
+.head .clef{left:.3em;top:calc(var(--sp) * -1.6);font-size:calc(var(--sp) * 6.6)}
+.head .ka{font-size:calc(var(--sp) * 4.2);transform:translateY(-62%)}
+.ch{white-space:nowrap}
+.ch small{font-size:.62em;vertical-align:.3em;font-weight:700;letter-spacing:-.02em}
+.ch .acc{font-size:.7em;vertical-align:.25em;margin-right:-.05em}
+.txt{font-weight:600;font-style:italic;font-size:.75em;color:var(--sub)}
+.cr .ch,.cr .txt{display:inline-block}
+.ch:has(.sd){display:inline-flex;flex-direction:column-reverse;align-items:center;line-height:1.15}
+.sd{font-size:.6em;font-weight:500;color:var(--sub);letter-spacing:0}
+.sd small{font-size:.7em;vertical-align:.25em;font-weight:500}
+@page{size:A4;margin:12mm}
+.line{break-inside:avoid}
+.export-clone{position:fixed;left:-10000px;top:0;width:760px;background:#fff;color:#000;padding:0}
+@media print{
+  .bar.sel .cr{background:none}.bar.sel .st{outline:none}
+  .barbar,.nosel-hint{display:none}
+  body{background:#fff;color:#000}
+  header,.ctrl{display:none}
+  .wrap{display:block;padding:0}
+  .panel{border:none;padding:0}
+  :root{--line:#000;--chord:#000;--sub:#444}
+}
+</style>
+</head>
+<body>
+<header><h1>🎼 コード譜リレイアウト</h1></header>
+<div class="wrap">
+  <div class="ctrl">
+    <div class="panel">
+      <h2>① コードを入力</h2>
+      <div class="row" style="margin-bottom:8px">
+        <select id="songSel"><option value="">サンプル曲を読み込む…</option>
+          <option value="dango">だんご3兄弟</option><option value="sakura">桜</option></select>
+      </div>
+      <div class="row" style="margin-bottom:8px">
+        <button id="saveFile">💾 ファイルに保存</button>
+        <button id="loadFile">📂 ファイルを開く</button>
+        <input id="fileIn" type="file" accept=".json,.chord,application/json" style="display:none">
+      </div>
+      <input id="titleIn" type="text" placeholder="曲名">
+      <label>コード(<code>|</code> で小節、<code>[A]</code> でセクション)</label>
+      <textarea id="src" spellcheck="false"></textarea>
+      <div class="hint">
+        例: <code>[Intro] Cm G7 | Cm G7 | [A] |: Cm | G7 :| Cm</code><br>
+        小節内はスペース区切り。<code>|:</code> <code>:|</code> でリピート、<code>%</code> は同じ小節、
+        それ以外の文字(<code>rit.</code> <code>D.S.</code> <code>Fine</code>)はそのまま表示。改行は自由。
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <h2>② キー変更(移調)</h2>
+      <div class="row">
+        <label style="margin:0">元のキー</label>
+        <select id="fromKey"></select>
+        <select id="mode"><option value="maj">長調</option><option value="min">短調</option></select>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button id="down">−1</button>
+        <span class="shift" id="shiftLabel">±0</span>
+        <button id="up">+1</button>
+        <button id="reset">元に戻す</button>
+      </div>
+      <label>コードの表示</label>
+      <div class="seg" id="disp"><button data-d="name">コード名</button><button data-d="deg">ディグリー(Ⅰ Ⅳ Ⅴ7)</button><button data-d="nash">ナッシュビル(1 4 5)</button></div>
+      <div class="hint" id="degNote"></div>
+      <div id="subWrap"><label>コードの上に小さく度数を出す</label>
+        <select id="sub"><option value="off">なし</option><option value="deg">ローマ数字(Ⅰ Ⅳ Ⅴ)</option><option value="nash">ナッシュビル(1 4 5)</option></select></div>
+      <label>移調先のキー</label>
+      <div class="seg" id="toKeys"></div>
+      <div class="hint" id="keyNote"></div>
+    </div>
+
+    <div class="panel" style="margin-top:12px">
+      <h2>③ レイアウト</h2>
+      <label>1段あたりの小節数</label>
+      <div class="seg" id="perRow"></div>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="breakSec" checked>
+        セクション([A] など)で必ず改行</label>
+      <label>文字サイズ <span id="fsv"></span></label>
+      <input type="range" id="fs" min="14" max="40" step="1" style="width:100%">
+      <label>段の間隔 <span id="gapv"></span></label>
+      <input type="range" id="gap" min="4" max="48" step="2" style="width:100%">
+      <div class="row" style="margin-top:12px">
+        <button class="primary" id="pdf">PDFをダウンロード</button>
+        <button id="print">印刷</button>
+        <button id="copy">移調後テキストをコピー</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="sheetPanel">
+  <div class="nosel-hint ctrl" id="selHint">小節をクリックすると選べます(段の入れ替えができます)</div>
+  <div class="barbar ctrl" id="barBar" hidden>
+    <span class="msg" id="barMsg"></span>
+    <button id="bUp">▲ 前の段へ</button>
+    <button id="bDown">▼ 次の段へ</button>
+    <button id="bSplit">✂ ここから新しい段</button>
+    <button id="bJoin">⤴ 前の段につなげる</button>
+    <button id="bReset" title="手動で付けた段の区切りをすべて消す">段をリセット</button>
+    <button id="bClose">✕</button>
+  </div>
+  <div id="sheet">
+    <div id="title"></div><div id="meta"></div><div id="chart"></div>
+  </div></div>
+</div>
+
+<script>
+const SONGS = {
+  dango: {title:'だんご3兄弟', from:'C', mode:'min', src:`
+[Intro] Cm G7 | Cm G7 | Cm G7 | |: Cm | G7 :|
+[A] Cm | G7 | G7 | Cm | Cm | Fm | G7 | Cm G7 Cm |
+[B] Cm | G7 | G7 | Cm | Cm | Fm | G7 | Cm G7 Cm |
+[C] Cm | G7 | Cm | Fm | G7 | Cm G7 Cm Bb |
+[D] Eb6 | Abaug | Fm7 | Bb7 | Eb | Db | Abmaj7 Cmmaj7 | Fm6 rit. | G7 a-tempo |
+(2/4) Cm G7 | (4/4) Cm G7 Cm G7 |
+[E] Cm | G7 | Cm | Fm | G7 | Fm G7 |
+Cm Gm Cm | [F] Cm | G7 | Cm |
+B F# G#m D#m | E | F# F#sus4 | F# :| 2. C#m7 C#7 | F#sus4 F# |
+[G] B | F# | G#m | D#m7 | E | B | C#m7 C#7 | F#sus4 F# | B | F# |
+[H] G#m | D#m7 | E | B | E | Em F# | B F# G#m D#m |
+E F# | B F# G#m D#m | E | F# F#sus4 | F# D.S. |
+E F# | B Fine`},
+  sakura: {title:'桜', from:'B', mode:'maj', src:`
+[Intro] B F# | G#m D#m | E F# | B F# | G#m D#m | E (2/4) |
+[A] F# F#sus4 | F# | B | G#m | D#m | E F# |
+B | G#m | D#m | E F# | E F# | B F# |
+[B] |: B | G#m | D#m | E F# | B | A#m7(b5) D#7 |
+[C] G#m | E F# | E F# | B |
+[D] G | D | G A G | F#7 Bm A | G | F#m7 | G | F# E F# |
+[E] B | F# | G#m | D#m7 | E | B |
+C#m7 C#7 | F#sus4 F# | B | F# | G#m | D#m7 |
+E | B | 1.3. E | Em F# | B F# G#m D#m | E F# :|`}
+};
+const SAMPLE = SONGS.dango.src.trim();
+
+// ---------- music ----------
+const SHARP = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+const FLAT  = ['C','Db','D','Eb','E','F','Gb','G','Ab','A','Bb','B'];
+const NOTE  = {C:0,D:2,E:4,F:5,G:7,A:9,B:11};
+const KEYS  = ['C','Db','D','Eb','E','F','F#','G','Ab','A','Bb','B'];
+const MAJ_FLAT = new Set(['F','Bb','Eb','Ab','Db','Gb']);
+const MIN_FLAT = new Set(['D','G','C','F','Bb','Eb']);
+const CHORD_RE = /^([A-G])([#b♯♭]?)([^\/]*)(?:\/([A-G])([#b♯♭]?))?$/;
+
+const pc = (n,a) => (NOTE[n] + (a==='#'||a==='♯'?1: a==='b'||a==='♭'?-1:0) + 12) % 12;
+const keyPc = k => pc(k[0], k[1]||'');
+
+function useFlats(pcv, mode){
+  const name = FLAT[pcv];
+  if (mode==='min'){
+    const n = SHARP[pcv]; // minor roots: C C# D Eb E F F# G G# A Bb B
+    return MIN_FLAT.has(pcv===3?'Eb':pcv===10?'Bb':n);
+  }
+  return MAJ_FLAT.has(name);
+}
+
+function parseChord(tok){
+  if (tok==='N.C.' || tok==='NC') return null;
+  const m = CHORD_RE.exec(tok);
+  return m ? {root:pc(m[1],m[2]), q:m[3], bass: m[4]? pc(m[4],m[5]) : null} : null;
+}
+
+function transposeTok(tok, semi, flats){
+  const c = parseChord(tok);
+  if (!c || semi===0) return tok;
+  const names = flats ? FLAT : SHARP;
+  let s = names[(c.root+semi+120)%12] + c.q;
+  if (c.bass!==null) s += '/' + names[(c.bass+semi+120)%12];
+  return s;
+}
+
+// ---------- parse ----------
+function parse(text){
+  const toks = text.match(/\|\||\|:|:\||\||\[[^\]]+\]|\S+?(?=\||$|\s)|\S+/g) || [];
+  const bars = []; let cur = {chords:[]}; let pendLabel=null, pendStart=false;
+  const flush = () => {
+    if (cur.chords.length || cur.rs || cur.re){
+      if (pendLabel){cur.label=pendLabel; pendLabel=null;}
+      if (pendStart){cur.rs=true; pendStart=false;}
+      bars.push(cur);
+    }
+    cur = {chords:[]};
+  };
+  for (const t of toks){
+    if (t==='|'||t==='||') flush();
+    else if (t==='|:'){ flush(); pendStart=true; }
+    else if (t===':|'){ if(cur.chords.length){cur.re=true;} else if(bars.length){bars[bars.length-1].re=true;} flush(); }
+    else if (/^\[.+\]$/.test(t)){ flush(); pendLabel=t.slice(1,-1); }
+    else {
+      if (!cur.chords.length){
+        if (pendLabel){cur.label=pendLabel; pendLabel=null;}
+        if (pendStart){cur.rs=true; pendStart=false;}
+      }
+      cur.chords.push(t);
+    }
+  }
+  flush();
+  return bars;
+}
+
+// ---------- state ----------
+const $ = id => document.getElementById(id);
+const store = {
+  get(k,d){ try{ const v=localStorage.getItem('ccapp.'+k); return v===null?d:JSON.parse(v);}catch(e){return d;} },
+  set(k,v){ try{ localStorage.setItem('ccapp.'+k, JSON.stringify(v)); }catch(e){} }
+};
+const S = {
+  title: store.get('title',SONGS.dango.title),
+  src:   store.get('src', SAMPLE),
+  from:  store.get('from','C'),
+  mode:  store.get('mode','min'),
+  shift: store.get('shift',0),
+  per:   store.get('per',4),
+  breakSec: store.get('breakSec',true),
+  fs:    store.get('fs',24),
+  gap:   store.get('gap',18),
+  disp:  store.get('disp','name'),
+  sub:   store.get('sub','deg'),
+  breaks: store.get('breaks',[]),
+};
+const save = () => Object.keys(S).forEach(k=>store.set(k,S[k]));
+
+// ---------- UI build ----------
+KEYS.forEach(k=>{ const o=document.createElement('option'); o.value=k; o.textContent=k; $('fromKey').appendChild(o); });
+for (let n=0;n<=8;n++){ const b=document.createElement('button'); b.textContent=n?n:'手動'; b.dataset.n=n; $('perRow').appendChild(b); }
+
+let LINES=[], NBARS=0, SEL=null;
+function render(){
+  save();
+  const semi = S.shift;
+  const toPc = (keyPc(S.from)+semi+120)%12;
+  const flats = useFlats(toPc, S.mode);
+  const toName = (flats?FLAT:SHARP)[toPc];
+  // controls
+  $('titleIn').value = S.title; if ($('src').value!==S.src) $('src').value = S.src;
+  $('fromKey').value = S.from; $('mode').value = S.mode;
+  $('shiftLabel').textContent = semi===0 ? '±0' : (semi>0?'+':'') + semi;
+  $('keyNote').textContent = `現在のキー: ${toName}${S.mode==='min'?'m':''}(${S.from}${S.mode==='min'?'m':''} から ${semi>=0?'+':''}${semi} 半音)`;
+  $('toKeys').innerHTML='';
+  KEYS.forEach(k=>{
+    const b=document.createElement('button'); b.textContent=k+(S.mode==='min'?'m':'');
+    if (keyPc(k)===toPc) b.classList.add('on');
+    b.onclick=()=>{ let d=(keyPc(k)-keyPc(S.from)+12)%12; if(d>6)d-=12; S.shift=d; render(); };
+    $('toKeys').appendChild(b);
+  });
+  [...$('perRow').children].forEach(b=>b.classList.toggle('on', +b.dataset.n===S.per));
+  [...$('disp').children].forEach(b=>b.classList.toggle('on', b.dataset.d===S.disp));
+  $('degNote').textContent = S.disp!=='name' ? `「元のキー」(${S.from}${S.mode==='min'?'m':''})を Ⅰ として表示。移調しても変わりません。転調する曲では、転調後はキー基準のままです。` : '';
+  $('subWrap').style.display = S.disp==='name' ? '' : 'none'; $('sub').value=S.sub;
+  $('breakSec').checked=S.breakSec;
+  $('fs').value=S.fs; $('fsv').textContent=S.fs+'px';
+  $('gap').value=S.gap; $('gapv').textContent=S.gap+'px';
+
+  // chart
+  $('title').textContent = S.title;
+  $('meta').textContent = `Key: ${toName}${S.mode==='min'?'m':''}` + (semi? `(原曲 ${S.from}${S.mode==='min'?'m':''})`:'');
+  const sheet = $('chart'); sheet.innerHTML=''; sheet.style.setProperty('--fs', S.fs+'px');
+  sheet.style.setProperty('--gap', S.gap+'px'); sheet.style.setProperty('--sp', (S.fs*0.3)+'px'); sheet.style.fontSize = S.fs+'px';
+  const bars = parse(S.src);
+  // split into lines
+  const lines=[]; let cur=[];
+  bars.forEach((b,i)=>{
+    b.i=i;
+    if (cur.length && ((S.breakSec && b.label) || (S.per>0 && cur.length>=S.per) || S.breaks.includes(i))){ lines.push(cur); cur=[]; }
+    cur.push(b);
+  });
+  if (cur.length) lines.push(cur);
+  LINES=lines; NBARS=bars.length;
+  if (SEL!==null && SEL>=NBARS) SEL=null;
+  for (const ln of lines){
+    const el=document.createElement('div'); el.className='line';
+    const sec=document.createElement('div'); sec.className='sec'+(ln[0].label?'':' empty'); sec.textContent=ln[0].label||'A';
+    el.appendChild(sec);
+    el.appendChild(staffHead(toPc, flats));
+    const grid=document.createElement('div'); grid.className='bars';
+    grid.style.gridTemplateColumns=`repeat(${S.per>0?S.per:ln.length}, minmax(0,1fr))`;
+    for (const b of ln){
+      const d=document.createElement('div'); d.className='bar'+(b.i===SEL?' sel':''); d.dataset.i=b.i;
+      d.onclick=()=>{ SEL=(SEL===b.i?null:b.i); render(); };
+      const cr=document.createElement('div'); cr.className='cr';
+      for (const t of b.chords){
+        const sp=document.createElement('span');
+        if (t==='%'){ sp.className='ch'; sp.textContent='%'; }
+        else if (parseChord(t)){ sp.className='ch'; sp.innerHTML = S.disp!=='name' ? degHTML(t)
+            : S.sub!=='off' ? '<span class="cn">'+chordHTML(transposeTok(t,semi,flats))+'</span><span class="sd">'+degHTML(t,S.sub)+'</span>'
+            : chordHTML(transposeTok(t,semi,flats)); }
+        else { sp.className = t==='N.C.'?'ch':'txt'; sp.textContent=t; }
+        cr.appendChild(sp);
+      }
+      const st=document.createElement('div'); st.className='st'+(b.rs?' rs':'')+(b.re?' re':'');
+      d.appendChild(cr); d.appendChild(st); grid.appendChild(d);
+    }
+    for (let i=ln.length;i<S.per;i++){ const p=document.createElement('div'); p.className='bar pad';
+      p.innerHTML='<div class="cr"></div><div class="st"></div>'; grid.appendChild(p); }
+    el.appendChild(grid); sheet.appendChild(el);
+  }
+  updateBarBar();
+}
+
+
+// ---------- staff head (treble clef + key signature) ----------
+const SHARP_POS=[0,3,-1,2,5,1,4];   // F C G D A E B, in half-spaces below the top line
+const FLAT_POS =[4,1,5,2,6,3,7];    // B E A D G C F
+const MAJ_SHARPS={0:0,7:1,2:2,9:3,4:4,11:5,6:6,5:-1,10:-2,3:-3,8:-4,1:-5};
+function keySigCount(toPc, flats){
+  const rel = S.mode==='min' ? (toPc+3)%12 : toPc;
+  let n = MAJ_SHARPS[rel];
+  if (rel===6 && flats) n=-6;
+  return n;
+}
+function staffHead(toPc, flats){
+  const n=keySigCount(toPc,flats), h=document.createElement('div'); h.className='head';
+  const clef=document.createElement('span'); clef.className='clef'; clef.textContent='\u{1D11E}'; h.appendChild(clef);
+  const pos = n>=0 ? SHARP_POS : FLAT_POS, cnt=Math.abs(n);
+  for(let i=0;i<cnt;i++){
+    const a=document.createElement('span'); a.className='ka'; a.textContent = n>0?'♯':'♭';
+    a.style.left=`calc(var(--sp) * ${6.6+i*1.9})`; a.style.top=`calc(var(--sp) * ${pos[i]*0.5})`; h.appendChild(a);
+  }
+  h.style.width=`calc(var(--sp) * ${6.6+cnt*1.9+1.2})`;
+  return h;
+}
+
+function chordHTML(s){
+  const m = CHORD_RE.exec(s); if(!m) return esc(s);
+  const acc = a => a==='#'?'<span class="acc">♯</span>': a==='b'?'<span class="acc">♭</span>':'';
+  let h = m[1]+acc(m[2])+ '<small>'+esc(m[3].replace(/b/g,'♭').replace(/#/g,'♯'))+'</small>';
+  if (m[4]) h += '/'+m[4]+acc(m[5]);
+  return h;
+}
+const DEG=['I','♭II','II','♭III','III','IV','♯IV','V','♭VI','VI','♭VII','VII'];
+const NASH=['1','♭2','2','♭3','3','4','♯4','5','♭6','6','♭7','7'];
+function degHTML(tok, mode){
+  const c=parseChord(tok); if(!c) return null;
+  const k=keyPc(S.from), T=(mode||S.disp)==='nash'?NASH:DEG, d=n=>T[(n-k+12)%12];
+  let h=d(c.root)+'<small>'+esc(c.q.replace(/b/g,'♭').replace(/#/g,'♯'))+'</small>';
+  if(c.bass!==null) h+='/'+d(c.bass);
+  return h;
+}
+const esc = s => s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// ---------- text export ----------
+function exportText(){
+  const semi=S.shift, flats=useFlats((keyPc(S.from)+semi+120)%12, S.mode);
+  return S.src.replace(/\[[^\]]+\]|\|\||\|:|:\||\||\S+/g, t=>{
+    if (t[0]==='['||t[0]==='|'||t===':|') return t;
+    return transposeTok(t,semi,flats);
+  });
+}
+
+// ---------- select a bar & move it between rows ----------
+function lineInfo(i){
+  const ln=LINES.find(l=>l.some(b=>b.i===i)); if(!ln) return {};
+  return {first:ln[0].i===i, last:ln[ln.length-1].i===i, only:ln.length===1};
+}
+function freezeLayout(){   // turn the current automatic wrapping into explicit breaks
+  if (S.per>0){ S.breaks=LINES.slice(1).map(l=>l[0].i); S.per=0; }
+}
+function setBreaks(fn){ freezeLayout(); const set=new Set(S.breaks); fn(set);
+  S.breaks=[...set].filter(x=>x>0&&x<NBARS).sort((a,b)=>a-b); render(); }
+function updateBarBar(){
+  const bb=$('barBar'); bb.hidden = SEL===null; $('selHint').style.display = SEL===null ? '' : 'none';
+  if (SEL===null) return;
+  const {first,last}=lineInfo(SEL);
+  $('barMsg').textContent=`${SEL+1}小節目を選択中`;
+  $('bUp').disabled   = !(first && SEL>0);
+  $('bDown').disabled = !(last && SEL<NBARS-1);
+  $('bSplit').disabled= first;
+  $('bJoin').disabled = !(first && SEL>0);
+}
+$('bUp').onclick=()=>{ const {last}=lineInfo(SEL); setBreaks(set=>{ set.delete(SEL); if(!last) set.add(SEL+1); }); };
+$('bDown').onclick=()=>{ const {first}=lineInfo(SEL); setBreaks(set=>{ if(!first) set.add(SEL); set.delete(SEL+1); }); };
+$('bSplit').onclick=()=>setBreaks(set=>set.add(SEL));
+$('bJoin').onclick=()=>setBreaks(set=>set.delete(SEL));
+$('bReset').onclick=()=>{ S.breaks=[]; if(S.per===0) S.per=4; render(); };
+$('bClose').onclick=()=>{ SEL=null; render(); };
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && SEL!==null){ SEL=null; render(); } });
+
+// ---------- events ----------
+$('songSel').onchange=e=>{ const g=SONGS[e.target.value]; if(!g) return;
+  Object.assign(S,{title:g.title,src:g.src.trim(),from:g.from,mode:g.mode,shift:0,breaks:[]}); SEL=null; e.target.value=''; render(); };
+$('titleIn').oninput=e=>{S.title=e.target.value; render();};
+$('src').oninput=e=>{S.src=e.target.value; render();};
+$('fromKey').onchange=e=>{S.from=e.target.value; render();};
+$('mode').onchange=e=>{S.mode=e.target.value; render();};
+$('up').onclick=()=>{S.shift=((S.shift+1+5)%12)-5; render();};
+$('down').onclick=()=>{S.shift=((S.shift-1+5+12)%12)-5; render();};
+$('reset').onclick=()=>{S.shift=0; render();};
+$('perRow').onclick=e=>{ if(e.target.dataset.n){S.per=+e.target.dataset.n; render();} };
+$('disp').onclick=e=>{ if(e.target.dataset.d){S.disp=e.target.dataset.d; render();} };
+$('sub').onchange=e=>{S.sub=e.target.value; render();};
+$('breakSec').onchange=e=>{S.breakSec=e.target.checked; render();};
+$('fs').oninput=e=>{S.fs=+e.target.value; render();};
+$('gap').oninput=e=>{S.gap=+e.target.value; render();};
+
+// ---------- PDF ----------
+function loadScript(src){
+  return new Promise((res,rej)=>{
+    const el=document.createElement('script'); el.src=src; el.onload=res;
+    el.onerror=()=>rej(new Error('load '+src)); document.head.appendChild(el);
+  });
+}
+async function makePDF(){
+  const btn=$('pdf'), label=btn.textContent;
+  btn.disabled=true; btn.textContent='作成中…';
+  let host;
+  try{
+    if(!window.html2canvas) await loadScript('vendor/html2canvas.min.js');
+    if(!window.jspdf) await loadScript('vendor/jspdf.umd.min.js');
+    try{ await document.fonts.ready; }catch(e){}
+    // render an off-screen light-theme copy at a fixed width
+    document.documentElement.classList.add('light');
+    host=document.createElement('div'); host.className='export-clone';
+    host.appendChild($('sheet').cloneNode(true));
+    host.querySelectorAll('.sel').forEach(e=>e.classList.remove('sel'));
+    document.body.appendChild(host);
+    const SC=2, root=host.firstChild;
+    const canvas=await html2canvas(root,{scale:SC,backgroundColor:'#ffffff',useCORS:true});
+    // candidate page-break positions (top of each line), in canvas px
+    const top0=root.getBoundingClientRect().top;
+    const cuts=[...root.querySelectorAll('.line')].map(l=>Math.round((l.getBoundingClientRect().top-top0-S.gap/2)*SC));
+    cuts.push(canvas.height);
+    const {jsPDF}=window.jspdf, pdf=new jsPDF({unit:'mm',format:'a4',orientation:'portrait'});
+    const M=12, PW=210-2*M, PH=297-2*M;
+    const mmPerPx=PW/canvas.width, maxPx=Math.floor(PH/mmPerPx);
+    let y=0, first=true;
+    while(y<canvas.height-1){
+      let end=y+maxPx;
+      if(end<canvas.height){
+        const ok=cuts.filter(c=>c>y+20 && c<=end);
+        end = ok.length ? ok[ok.length-1] : end;
+      } else end=canvas.height;
+      const h=end-y, pc=document.createElement('canvas'); pc.width=canvas.width; pc.height=h;
+      const ctx=pc.getContext('2d'); ctx.fillStyle='#fff'; ctx.fillRect(0,0,pc.width,h);
+      ctx.drawImage(canvas,0,y,canvas.width,h,0,0,canvas.width,h);
+      if(!first) pdf.addPage();
+      pdf.addImage(pc.toDataURL('image/jpeg',0.95),'JPEG',M,M,PW,h*mmPerPx);
+      first=false; y=end;
+    }
+    const keyName=$('meta').textContent.replace(/^Key:\s*/,'').replace(/[\s()（）\/]+/g,'_');
+    pdf.save(`${(S.title||'chart').replace(/[\\\/:*?"<>|]/g,'')}_${keyName}.pdf`);
+  }catch(err){
+    alert('PDFを作れませんでした。「印刷」からPDF保存してください。\n'+err.message);
+  }finally{
+    document.documentElement.classList.remove('light');
+    if(host) host.remove();
+    btn.disabled=false; btn.textContent=label;
+  }
+}
+$('pdf').onclick=makePDF;
+
+// ---------- save / load as file ----------
+const SAVE_KEYS=['title','src','from','mode','shift','per','breakSec','fs','gap','disp','sub','breaks'];
+$('saveFile').onclick=()=>{
+  const data={app:'chord-chart',v:1}; SAVE_KEYS.forEach(k=>data[k]=S[k]);
+  const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob);
+  a.download=((S.title||'chart').replace(/[\\\/:*?"<>|]/g,''))+'.chord.json';
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(a.href),1000);
+};
+$('loadFile').onclick=()=>$('fileIn').click();
+$('fileIn').onchange=async e=>{
+  const f=e.target.files[0]; e.target.value=''; if(!f) return;
+  try{
+    const d=JSON.parse(await f.text());
+    if(d.app!=='chord-chart' || typeof d.src!=='string') throw new Error('形式が違います');
+    SAVE_KEYS.forEach(k=>{ if(d[k]!==undefined) S[k]=d[k]; });
+    render();
+  }catch(err){ alert('読み込めませんでした: '+err.message); }
+};
+$('print').onclick=()=>window.print();
+$('copy').onclick=async()=>{
+  try{ await navigator.clipboard.writeText(exportText()); $('copy').textContent='コピーしました ✓'; }
+  catch(e){ $('src').value=exportText(); $('copy').textContent='テキスト欄に出力しました'; }
+  setTimeout(()=>$('copy').textContent='移調後テキストをコピー',1800);
+};
+render();
+if('serviceWorker' in navigator && location.protocol!=='file:') navigator.serviceWorker.register('sw.js').catch(()=>{});
+</script>
+</body>
+</html>
