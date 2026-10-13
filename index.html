@@ -221,6 +221,7 @@ button:active{transform:translateY(1px)}
     <button id="bJoin">⤴ 前の段につなげる</button>
     <button id="bReset" title="手動で付けた段の区切りをすべて消す">段をリセット</button>
     <button id="bClose">✕</button>
+    <div id="lensWrap" style="display:none;flex-basis:100%;margin-top:4px"><div class="hint" style="margin:0 0 2px">原本のこの小節(拡大)</div><canvas id="lens" style="max-width:100%;border:1px solid var(--border);border-radius:6px;background:#fff"></canvas></div>
     <div id="chEdit" style="display:none;flex-basis:100%;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px">
       <span>コード:</span>
       <input id="chIn" type="text" style="width:9em" autocomplete="off" spellcheck="false">
@@ -525,6 +526,7 @@ function updateBarBar(){
   $('bDown').disabled = !(last && SEL<NBARS-1);
   $('bSplit').disabled= first;
   $('bJoin').disabled = !(first && SEL>0);
+  drawLens();
   const ce=$('chEdit'); ce.style.display = SELCH===null ? 'none' : 'flex';
   if (SELCH!==null){ const t=BARS[SEL].chords[SELCH]; if(document.activeElement!==$('chIn')) $('chIn').value=dispTok(t); $('chIn').dataset.k=SEL+':'+SELCH; }
 }
@@ -670,10 +672,13 @@ function guessKey(ch){
 // ---------- images (PNG/JPG): detect rows and bars, chords are typed in by hand ----------
 const fileToURL=f=>new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(r.error); r.readAsDataURL(f); });
 async function readImages(files){
-  const rows=[], pages=[];
+  const rows=[], pages=[], geo=[];
+  let pi=-1;
   for(const f of files){
+    pi++;
     const url=await fileToURL(f); pages.push(url);
     const im=new Image(); im.src=url; await im.decode();
+    const sc=im.width/Math.min(im.width,1600);
     const W=Math.min(im.width,1600), H=Math.round(im.height*W/im.width), u=W/1190;   // analyse at (about) native size: thin lines stay sharp
     const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
     const ctx=cv.getContext('2d',{willReadFrequently:true}); ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
@@ -704,13 +709,15 @@ async function readImages(files){
       // intervals between bar lines; drop a leading one that is full of ink (clef / key signature)
       const isLine=y=>st.lines.some(l=>y>=l.a-1&&y<=l.b+1);
       const ink=(x0,x1)=>{ let d=0,t=0; for(let x=Math.ceil(x0)+3;x<x1-3;x++) for(let y=st.top;y<=st.bottom;y++){ if(isLine(y)) continue; t++; if(dark(x,y)) d++; } return t? d/t : 0; };
-      let n=bl.length-1;
-      if(n>=1 && ink(bl[0],bl[1])>0.08) n--;
+      let n=bl.length-1, s0=0;
+      if(n>=1 && ink(bl[0],bl[1])>0.08){ n--; s0=1; }
       if(n<1) continue;
+      const q=(st.bottom-st.top)/4;
+      for(let k=0;k<n;k++) geo.push({p:pi,x0:bl[s0+k]*sc,x1:bl[s0+k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc});
       rows.push(Array(n).fill('?').join(' | ')+' |');
     }
   }
-  return {rows,pages};
+  return {rows,pages,geo};
 }
 
 $('loadPdf').onclick=()=>$('pdfIn').click();
@@ -724,7 +731,7 @@ $('pdfIn').onchange=async e=>{
       const r=await readImages(imgs);
       if(!r.rows.length) throw new Error('五線を見つけられませんでした');
       Object.assign(S,{src:r.rows.join('\n'), shift:0, breaks:[], manual:false});
-      SEL=null; SELCH=null; setPages(r.pages); S.view='split'; renderOrig(); render();
+      SEL=null; SELCH=null; setPages(r.pages,r.geo); S.view='split'; renderOrig(); render();
       const q=document.querySelector('.bar .tok'); if(q) q.click();
       msg.textContent=`${r.rows.length} 段、${r.rows.reduce((a,x)=>a+x.split('|').length-1,0)} 小節を見つけました。画像からコードは読み取れないので、原本を見ながら「?」を順に入力してください。入力欄には「Cm G7」のように、1小節に複数のコードを書けます(Enter で次の小節へ進みます)。元のキーも、必要なら選び直してください。`;
       return;
@@ -740,14 +747,14 @@ $('pdfIn').onchange=async e=>{
 };
 
 // ---------- original PDF pages (kept in this browser only) ----------
-let PAGES=[];
+let PAGES=[], BARGEO=[];
 const idb={
   open(){ return new Promise((res,rej)=>{ const r=indexedDB.open('chordchart',1);
     r.onupgradeneeded=()=>r.result.createObjectStore('kv'); r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); },
   async get(k){ const db=await this.open(); return new Promise((res,rej)=>{ const q=db.transaction('kv').objectStore('kv').get(k); q.onsuccess=()=>res(q.result); q.onerror=()=>rej(q.error); }); },
   async set(k,v){ const db=await this.open(); return new Promise((res,rej)=>{ const t=db.transaction('kv','readwrite'); t.objectStore('kv').put(v,k); t.oncomplete=()=>res(); t.onerror=()=>rej(t.error); }); }
 };
-function setPages(arr){ PAGES=arr||[]; idb.set('pages',PAGES).catch(()=>{}); }
+function setPages(arr,geo){ PAGES=arr||[]; BARGEO=geo||[]; idb.set('pages',PAGES).catch(()=>{}); idb.set('bargeo',BARGEO).catch(()=>{}); }
 function renderOrig(){
   const box=$('origImgs'); box.innerHTML='';
   PAGES.forEach((u,i)=>{ const im=new Image(); im.src=u; im.alt=`原本 ${i+1}ページ`; im.style.width=$('oz').value+'%'; box.appendChild(im); });
@@ -761,7 +768,22 @@ function applyView(){
 $('viewTabs').onclick=e=>{ if(e.target.dataset.v){ S.view=e.target.dataset.v; render(); } };
 $('oz').oninput=()=>[...$('origImgs').children].forEach(im=>im.style.width=$('oz').value+'%');
 $('oClear').onclick=()=>{ if(!confirm('読み込んだ原本の画像を消しますか?(譜面は消えません)')) return; setPages([]); S.view='chart'; renderOrig(); render(); };
-idb.get('pages').then(p=>{ if(p&&p.length){ PAGES=p; renderOrig(); render(); } }).catch(()=>{});
+idb.get('pages').then(async p=>{ if(p&&p.length){ PAGES=p; try{ BARGEO=(await idb.get('bargeo'))||[]; }catch(e){} renderOrig(); render(); } }).catch(()=>{});
+
+const LENS_IMG={};
+function drawLens(){
+  const wrap=$('lensWrap'), g=(SEL!==null&&BARGEO.length===NBARS)?BARGEO[SEL]:null;
+  if(!g||!PAGES[g.p]){ wrap.style.display='none'; return; }
+  wrap.style.display='';
+  const url=PAGES[g.p]; let im=LENS_IMG[url];
+  const draw=()=>{
+    const m=6, sx=Math.max(0,g.x0-m), sw=g.x1-g.x0+2*m, sy=Math.max(0,g.y0), sh=g.y1-g.y0, k=Math.min(6,560/sw), cv=$('lens');
+    cv.width=Math.round(sw*k); cv.height=Math.round(sh*k);
+    const c=cv.getContext('2d'); c.imageSmoothingQuality='high'; c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height);
+    c.drawImage(im,sx,sy,sw,sh,0,0,cv.width,cv.height);
+  };
+  if(!im){ im=LENS_IMG[url]=new Image(); im.onload=draw; im.src=url; } else if(im.complete) draw(); else im.onload=draw;
+}
 
 // ---------- events ----------
 $('songSel').onchange=e=>{ const g=SONGS[e.target.value]; if(!g) return;
