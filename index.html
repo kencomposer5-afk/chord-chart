@@ -74,11 +74,12 @@ button:active{transform:translateY(1px)}
              radial-gradient(circle at 4px 62.5%,var(--line) 1.8px,transparent 2.3px)}
 .st.rs::before{left:3px} .st.re::after{right:3px}
 .bar.pad{visibility:hidden}
-.tsig{position:absolute;left:calc(var(--sp) * .7);top:0;height:100%;display:flex;flex-direction:column;
-  align-items:center;font-weight:800;color:var(--line);z-index:1;min-width:calc(var(--sp) * 1.6)}
-.tsig span{display:block;height:50%;font-size:calc(var(--sp) * 3);line-height:calc(var(--sp) * 2);
-  font-family:Georgia,"Times New Roman",serif}
-.tsig .cc{height:100%;font-family:"NotoMusic","Noto Music",serif;font-weight:400;font-size:calc(var(--sp) * 4.6);line-height:calc(var(--sp) * 4)}
+.tsig{position:absolute;left:calc(var(--sp) * .9);top:0;height:100%;display:flex;flex-direction:column;
+  align-items:center;font-weight:900;color:var(--line);z-index:1;min-width:calc(var(--sp) * 2);
+  font-family:"Times New Roman",Times,"Noto Serif","DejaVu Serif",serif;font-variant-numeric:lining-nums}
+.tsig span{display:flex;align-items:center;justify-content:center;height:50%;font-size:calc(var(--sp) * 3.4);line-height:1;
+  -webkit-text-stroke:calc(var(--sp) * .12) currentColor}
+.tsig .cc{height:100%;font-size:calc(var(--sp) * 4.2)}
 .st.rs .tsig{left:calc(var(--sp) * 2)}
 .bar.hasts .cr{padding-left:calc(var(--sp) * 3.6)}
 .bar:not(.pad){cursor:pointer}
@@ -415,7 +416,7 @@ function render(){
       const st=document.createElement('div'); st.className='st'+(b.rs?' rs':'')+(b.re?' re':'');
       if (b.ts){
         const [n,dn]=b.ts.split('/'), ts=document.createElement('div'); ts.className='tsig';
-        ts.innerHTML = (n==='4'&&dn==='4') ? '<span class="cc">\u{1D134}</span>' : `<span>${n}</span><span>${dn}</span>`;
+        ts.innerHTML = (n==='4'&&dn==='4') ? '<span class="cc">C</span>' : `<span>${n}</span><span>${dn}</span>`;
         st.appendChild(ts); d.classList.add('hasts');
       }
       d.appendChild(cr); d.appendChild(st); grid.appendChild(d);
