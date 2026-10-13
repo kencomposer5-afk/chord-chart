@@ -86,8 +86,8 @@ button:active{transform:translateY(1px)}
 .bar:not(.pad):hover .cr{background:rgba(47,111,237,.07);border-radius:4px}
 .tok{cursor:pointer;border-radius:4px}
 .tok:hover{background:rgba(47,111,237,.15)}
-.tok.selc{background:var(--accent);color:var(--accent-ink)}
-.tok.selc .sd{color:inherit}
+.tok.selc{background:rgba(47,111,237,.22);outline:2px solid var(--accent);outline-offset:1px;padding-top:.3em}
+.tok.selc .sd{color:var(--sub)}
 .bar.unv .cr{outline:2px dashed #d9a400;outline-offset:-2px;border-radius:4px;background:rgba(255,200,0,.10)}
 .bar.unvlow .cr{outline-color:#d93025;background:rgba(217,48,37,.10)}
 .bar.unvhigh .cr{outline-color:#2e9e5b;background:rgba(46,158,91,.08)}
@@ -788,14 +788,19 @@ async function readImageURLs(urls){
 }
 
 const NATIVE_VISION=()=>!!(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.vision);
+function layoutFromGeo(){          // one screen row per staff row of the original, wide enough for the longest row
+  const starts=[]; let prev=-1, run=0, mx=0;
+  BARGEO.forEach((g,i)=>{ if(g.row!==prev){ if(i>0) starts.push(i); mx=Math.max(mx,run); run=0; prev=g.row; } run++; });
+  mx=Math.max(mx,run); S.breaks=starts; S.manual=true; S.per=Math.max(1,Math.min(8,mx));
+}
 function skeletonFromGeo(){
   const byRow=new Map(); BARGEO.forEach(g=>byRow.set(g.row,(byRow.get(g.row)||0)+1));
-  S.src=[...byRow.values()].map(n=>Array(n).fill('?').join(' | ')+' |').join('\n'); S.breaks=[]; S.manual=false;
+  S.src=[...byRow.values()].map(n=>Array(n).fill('?').join(' | ')+' |').join('\n'); layoutFromGeo();
 }
 async function finishImageImport(r,msg){
   if(!r.rows.length) throw new Error('五線を見つけられませんでした');
   Object.assign(S,{src:r.rows.join('\n'), shift:0, breaks:[], manual:false});
-  SEL=null; SELCH=null; setPages(r.pages,r.geo); S.view='split'; renderOrig(); render();
+  SEL=null; SELCH=null; setPages(r.pages,r.geo); layoutFromGeo(); S.view='split'; renderOrig(); render();
   const q=document.querySelector('.bar .tok'); if(q) q.click();
   const nb=r.rows.reduce((a,x)=>a+x.split('|').length-1,0);
   if(NATIVE_VISION()){        // running inside the Mac app: use Apple's Vision text recognition
