@@ -879,6 +879,7 @@ async function readImageURLs(urls){
       let sigEnd=bl[0], last=bl[0];
       for(let x=Math.ceil(bl[0])+3;x<W;x++){ if(inkCol(x)) last=x; else if(x-last>W*0.025) break; }
       if(last>bl[0]) sigEnd=last;
+
       const starts=[sigEnd+2,...bl.filter(x=>x>sigEnd+3)];
       if(starts.length>1){        // a bar line right after the signature leaves an empty gap: drop it unless chords stand above it
         const w1=starts[1]-starts[0], qq=(st.bottom-st.top)/4;
@@ -918,7 +919,7 @@ async function readImageURLs(urls){
         const toks=[];
         for(const c of merged){ const t=toks[toks.length-1];
           if(t&&c.a-t.b<=0.6*q){ t.b=Math.max(t.b,c.b); t.c=Math.min(t.c,c.c); t.d=Math.max(t.d,c.d); t.pts=t.pts.concat(c.pts); t.parts.push(c); } else toks.push({a:c.a,b:c.b,c:c.c,d:c.d,pts:c.pts.slice(),parts:[c]}); }
-        return toks.map(t=>{ const w=t.b-t.a+1, hh=t.d-t.c+1, GX=16, GY=12, g=new Float32Array(GX*GY);
+        return toks.filter(t=>t.d+y0>=st.top-2.8*q).map(t=>{ const w=t.b-t.a+1, hh=t.d-t.c+1, GX=16, GY=12, g=new Float32Array(GX*GY);
           t.pts.forEach(([x,y])=>g[Math.min(GY-1,Math.floor((y-t.c)/hh*GY))*GX+Math.min(GX-1,Math.floor((x-t.a)/w*GX))]++);
           const A=(w/GX)*(hh/GY);
           return {cx:(t.a+t.b)/2, raw:t, sig:{w:+(w/q).toFixed(2),h:+(hh/q).toFixed(2),g:Array.from(g,v=>+Math.min(1,v/Math.max(1,A)).toFixed(2))}}; });
