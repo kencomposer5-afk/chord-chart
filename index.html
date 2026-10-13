@@ -76,6 +76,10 @@ button:active{transform:translateY(1px)}
 .bar.pad{visibility:hidden}
 .bar:not(.pad){cursor:pointer}
 .bar:not(.pad):hover .cr{background:rgba(47,111,237,.07);border-radius:4px}
+.tok{cursor:pointer;border-radius:4px}
+.tok:hover{background:rgba(47,111,237,.15)}
+.tok.selc{background:var(--accent);color:var(--accent-ink)}
+.tok.selc .sd{color:inherit}
 .bar.sel .cr{background:rgba(47,111,237,.18);border-radius:4px}
 .bar.sel .st{outline:2px solid var(--accent);outline-offset:2px}
 .barbar{position:sticky;top:0;z-index:5;display:flex;gap:6px;align-items:center;flex-wrap:wrap;
@@ -141,7 +145,6 @@ button:active{transform:translateY(1px)}
       <div class="row">
         <label style="margin:0">元のキー</label>
         <select id="fromKey"></select>
-        <select id="mode"><option value="maj">長調</option><option value="min">短調</option></select>
       </div>
       <div class="row" style="margin-top:10px">
         <button id="down">−1</button>
@@ -154,6 +157,7 @@ button:active{transform:translateY(1px)}
       <div class="hint" id="degNote"></div>
       <div id="subWrap"><label>コードの上に小さく度数を出す</label>
         <select id="sub"><option value="off">なし</option><option value="deg">ローマ数字(Ⅰ Ⅳ Ⅴ)</option><option value="nash">ナッシュビル(1 4 5)</option></select></div>
+      <div class="hint">すべて長調で考えます。短調の曲は、同じ調号の長調を選んでください(例: Cm の曲 → E♭)。</div>
       <label>移調先のキー</label>
       <div class="seg" id="toKeys"></div>
       <div class="hint" id="keyNote"></div>
@@ -163,6 +167,8 @@ button:active{transform:translateY(1px)}
       <h2>③ レイアウト</h2>
       <label>1段あたりの小節数</label>
       <div class="seg" id="perRow"></div>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="manualCb">
+        段の区切りを手動にする(小節をクリックして調整)</label>
       <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="breakSec" checked>
         セクション([A] など)で必ず改行</label>
       <label>文字サイズ <span id="fsv"></span></label>
@@ -187,6 +193,13 @@ button:active{transform:translateY(1px)}
     <button id="bJoin">⤴ 前の段につなげる</button>
     <button id="bReset" title="手動で付けた段の区切りをすべて消す">段をリセット</button>
     <button id="bClose">✕</button>
+    <div id="chEdit" style="display:none;flex-basis:100%;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px">
+      <span>コード:</span>
+      <input id="chIn" type="text" style="width:9em" autocomplete="off" spellcheck="false">
+      <button id="chOk" class="primary">変更</button>
+      <button id="chAdd">＋ 右に追加</button>
+      <button id="chDel">削除</button>
+    </div>
   </div>
   <div id="sheet">
     <div id="title"></div><div id="meta"></div><div id="chart"></div>
@@ -195,7 +208,7 @@ button:active{transform:translateY(1px)}
 
 <script>
 const SONGS = {
-  dango: {title:'だんご3兄弟', from:'C', mode:'min', src:`
+  dango: {title:'だんご3兄弟', from:'Eb', mode:'maj', src:`
 [Intro] Cm G7 | Cm G7 | Cm G7 | |: Cm | G7 :|
 [A] Cm | G7 | G7 | Cm | Cm | Fm | G7 | Cm G7 Cm |
 [B] Cm | G7 | G7 | Cm | Cm | Fm | G7 | Cm G7 Cm |
@@ -260,17 +273,18 @@ function transposeTok(tok, semi, flats){
 
 // ---------- parse ----------
 function parse(text){
-  const toks = text.match(/\|\||\|:|:\||\||\[[^\]]+\]|\S+?(?=\||$|\s)|\S+/g) || [];
-  const bars = []; let cur = {chords:[]}; let pendLabel=null, pendStart=false;
+  const toks = [...text.matchAll(/\|\||\|:|:\||\||\[[^\]]+\]|\S+?(?=\||$|\s)|\S+/g)];
+  const bars = []; let cur = {chords:[],pos:[]}; let pendLabel=null, pendStart=false;
   const flush = () => {
     if (cur.chords.length || cur.rs || cur.re){
       if (pendLabel){cur.label=pendLabel; pendLabel=null;}
       if (pendStart){cur.rs=true; pendStart=false;}
       bars.push(cur);
     }
-    cur = {chords:[]};
+    cur = {chords:[],pos:[]};
   };
-  for (const t of toks){
+  for (const m of toks){
+    const t=m[0];
     if (t==='|'||t==='||') flush();
     else if (t==='|:'){ flush(); pendStart=true; }
     else if (t===':|'){ if(cur.chords.length){cur.re=true;} else if(bars.length){bars[bars.length-1].re=true;} flush(); }
@@ -280,7 +294,7 @@ function parse(text){
         if (pendLabel){cur.label=pendLabel; pendLabel=null;}
         if (pendStart){cur.rs=true; pendStart=false;}
       }
-      cur.chords.push(t);
+      cur.chords.push(t); cur.pos.push([m.index, m.index+t.length]);
     }
   }
   flush();
@@ -296,10 +310,11 @@ const store = {
 const S = {
   title: store.get('title',SONGS.dango.title),
   src:   store.get('src', SAMPLE),
-  from:  store.get('from','C'),
-  mode:  store.get('mode','min'),
+  from:  store.get('from','Eb'),
+  mode:  store.get('mode','maj'),
   shift: store.get('shift',0),
   per:   store.get('per',4),
+  manual: store.get('manual',false),
   breakSec: store.get('breakSec',true),
   fs:    store.get('fs',24),
   gap:   store.get('gap',18),
@@ -307,13 +322,16 @@ const S = {
   sub:   store.get('sub','deg'),
   breaks: store.get('breaks',[]),
 };
+if(!(S.per>=1)){ S.per=4; S.manual=true; }
+const toMajor = o => { if(o.mode==='min'){ o.from=KEYS[(keyPc(o.from)+3)%12]; } o.mode='maj'; };
+toMajor(S); if(store.get('mode','maj')==='min') store.set('mode','maj');
 const save = () => Object.keys(S).forEach(k=>store.set(k,S[k]));
 
 // ---------- UI build ----------
 KEYS.forEach(k=>{ const o=document.createElement('option'); o.value=k; o.textContent=k; $('fromKey').appendChild(o); });
-for (let n=0;n<=8;n++){ const b=document.createElement('button'); b.textContent=n?n:'手動'; b.dataset.n=n; $('perRow').appendChild(b); }
+for (let n=1;n<=8;n++){ const b=document.createElement('button'); b.textContent=n; b.dataset.n=n; $('perRow').appendChild(b); }
 
-let LINES=[], NBARS=0, SEL=null;
+let LINES=[], NBARS=0, SEL=null, SELCH=null, BARS=[];
 function render(){
   save();
   const semi = S.shift;
@@ -322,7 +340,7 @@ function render(){
   const toName = (flats?FLAT:SHARP)[toPc];
   // controls
   $('titleIn').value = S.title; if ($('src').value!==S.src) $('src').value = S.src;
-  $('fromKey').value = S.from; $('mode').value = S.mode;
+  $('fromKey').value = S.from;
   $('shiftLabel').textContent = semi===0 ? '±0' : (semi>0?'+':'') + semi;
   $('keyNote').textContent = `現在のキー: ${toName}${S.mode==='min'?'m':''}(${S.from}${S.mode==='min'?'m':''} から ${semi>=0?'+':''}${semi} 半音)`;
   $('toKeys').innerHTML='';
@@ -336,6 +354,7 @@ function render(){
   [...$('disp').children].forEach(b=>b.classList.toggle('on', b.dataset.d===S.disp));
   $('degNote').textContent = S.disp!=='name' ? `「元のキー」(${S.from}${S.mode==='min'?'m':''})を Ⅰ として表示。移調しても変わりません。転調する曲では、転調後はキー基準のままです。` : '';
   $('subWrap').style.display = S.disp==='name' ? '' : 'none'; $('sub').value=S.sub;
+  $('manualCb').checked=S.manual;
   $('breakSec').checked=S.breakSec;
   $('fs').value=S.fs; $('fsv').textContent=S.fs+'px';
   $('gap').value=S.gap; $('gapv').textContent=S.gap+'px';
@@ -350,36 +369,40 @@ function render(){
   const lines=[]; let cur=[];
   bars.forEach((b,i)=>{
     b.i=i;
-    if (cur.length && ((S.breakSec && b.label) || (S.per>0 && cur.length>=S.per) || S.breaks.includes(i))){ lines.push(cur); cur=[]; }
+    if (cur.length && ((S.breakSec && b.label) || (!S.manual && cur.length>=S.per) || S.breaks.includes(i))){ lines.push(cur); cur=[]; }
     cur.push(b);
   });
   if (cur.length) lines.push(cur);
-  LINES=lines; NBARS=bars.length;
+  LINES=lines; NBARS=bars.length; BARS=bars;
+  const cols=Math.max(S.per, ...lines.map(l=>l.length));
   if (SEL!==null && SEL>=NBARS) SEL=null;
+  if (SEL===null || SELCH>=(BARS[SEL]||{chords:[]}).chords.length) SELCH=null;
   for (const ln of lines){
     const el=document.createElement('div'); el.className='line';
     const sec=document.createElement('div'); sec.className='sec'+(ln[0].label?'':' empty'); sec.textContent=ln[0].label||'A';
     el.appendChild(sec);
     el.appendChild(staffHead(toPc, flats));
     const grid=document.createElement('div'); grid.className='bars';
-    grid.style.gridTemplateColumns=`repeat(${S.per>0?S.per:ln.length}, minmax(0,1fr))`;
+    grid.style.gridTemplateColumns=`repeat(${cols}, minmax(0,1fr))`;
     for (const b of ln){
       const d=document.createElement('div'); d.className='bar'+(b.i===SEL?' sel':''); d.dataset.i=b.i;
-      d.onclick=()=>{ SEL=(SEL===b.i?null:b.i); render(); };
+      d.onclick=()=>{ SELCH=null; SEL=(SEL===b.i?null:b.i); render(); };
       const cr=document.createElement('div'); cr.className='cr';
-      for (const t of b.chords){
+      b.chords.forEach((t,k)=>{
         const sp=document.createElement('span');
         if (t==='%'){ sp.className='ch'; sp.textContent='%'; }
         else if (parseChord(t)){ sp.className='ch'; sp.innerHTML = S.disp!=='name' ? degHTML(t)
             : S.sub!=='off' ? '<span class="cn">'+chordHTML(transposeTok(t,semi,flats))+'</span><span class="sd">'+degHTML(t,S.sub)+'</span>'
             : chordHTML(transposeTok(t,semi,flats)); }
         else { sp.className = t==='N.C.'?'ch':'txt'; sp.textContent=t; }
+        sp.classList.add('tok'); if (b.i===SEL && k===SELCH) sp.classList.add('selc');
+        sp.onclick=ev=>{ ev.stopPropagation(); SEL=b.i; SELCH=k; render(); };
         cr.appendChild(sp);
-      }
+      });
       const st=document.createElement('div'); st.className='st'+(b.rs?' rs':'')+(b.re?' re':'');
       d.appendChild(cr); d.appendChild(st); grid.appendChild(d);
     }
-    for (let i=ln.length;i<S.per;i++){ const p=document.createElement('div'); p.className='bar pad';
+    for (let i=ln.length;i<cols;i++){ const p=document.createElement('div'); p.className='bar pad';
       p.innerHTML='<div class="cr"></div><div class="st"></div>'; grid.appendChild(p); }
     el.appendChild(grid); sheet.appendChild(el);
   }
@@ -442,7 +465,7 @@ function lineInfo(i){
   return {first:ln[0].i===i, last:ln[ln.length-1].i===i, only:ln.length===1};
 }
 function freezeLayout(){   // turn the current automatic wrapping into explicit breaks
-  if (S.per>0){ S.breaks=LINES.slice(1).map(l=>l[0].i); S.per=0; }
+  if (!S.manual){ S.breaks=LINES.slice(1).map(l=>l[0].i); S.manual=true; }
 }
 function setBreaks(fn){ freezeLayout(); const set=new Set(S.breaks); fn(set);
   S.breaks=[...set].filter(x=>x>0&&x<NBARS).sort((a,b)=>a-b); render(); }
@@ -455,27 +478,43 @@ function updateBarBar(){
   $('bDown').disabled = !(last && SEL<NBARS-1);
   $('bSplit').disabled= first;
   $('bJoin').disabled = !(first && SEL>0);
+  const ce=$('chEdit'); ce.style.display = SELCH===null ? 'none' : 'flex';
+  if (SELCH!==null){ const t=BARS[SEL].chords[SELCH]; if(document.activeElement!==$('chIn')) $('chIn').value=dispTok(t); $('chIn').dataset.k=SEL+':'+SELCH; }
 }
 $('bUp').onclick=()=>{ const {last}=lineInfo(SEL); setBreaks(set=>{ set.delete(SEL); if(!last) set.add(SEL+1); }); };
 $('bDown').onclick=()=>{ const {first}=lineInfo(SEL); setBreaks(set=>{ if(!first) set.add(SEL); set.delete(SEL+1); }); };
 $('bSplit').onclick=()=>setBreaks(set=>set.add(SEL));
 $('bJoin').onclick=()=>setBreaks(set=>set.delete(SEL));
-$('bReset').onclick=()=>{ S.breaks=[]; if(S.per===0) S.per=4; render(); };
-$('bClose').onclick=()=>{ SEL=null; render(); };
-document.addEventListener('keydown',e=>{ if(e.key==='Escape' && SEL!==null){ SEL=null; render(); } });
+$('bReset').onclick=()=>{ S.breaks=[]; S.manual=false; render(); };
+$('bClose').onclick=()=>{ SEL=null; SELCH=null; render(); };
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && SEL!==null){ SEL=null; SELCH=null; render(); } });
+
+// ---------- edit a chord in place ----------
+function curFlats(){ return useFlats((keyPc(S.from)+S.shift+120)%12, S.mode); }
+function dispTok(t){ return parseChord(t) ? transposeTok(t,S.shift,curFlats()) : t; }   // as shown on screen
+function srcTok(v){ v=v.trim(); return parseChord(v) ? transposeTok(v,-S.shift,useFlats(keyPc(S.from),S.mode)) : v; }  // back to the original key
+function editSrc(fn){ S.src=fn(S.src); render(); }
+$('chOk').onclick=()=>{ const v=$('chIn').value.trim(); if(!v||SELCH===null) return;
+  const [a,b]=BARS[SEL].pos[SELCH]; editSrc(x=>x.slice(0,a)+srcTok(v)+x.slice(b)); };
+$('chIn').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('chOk').click(); } e.stopPropagation(); };
+$('chDel').onclick=()=>{ if(SELCH===null) return; const [a,b]=BARS[SEL].pos[SELCH];
+  editSrc(x=>x.slice(0,a)+x.slice(b).replace(/^ /,'')); SELCH=null; render(); };
+$('chAdd').onclick=()=>{ if(SELCH===null) return; const [a,b]=BARS[SEL].pos[SELCH];
+  const t=BARS[SEL].chords[SELCH]; SELCH=SELCH+1; editSrc(x=>x.slice(0,b)+' '+t+x.slice(b));
+  $('chIn').focus(); $('chIn').select(); };
 
 // ---------- events ----------
 $('songSel').onchange=e=>{ const g=SONGS[e.target.value]; if(!g) return;
-  Object.assign(S,{title:g.title,src:g.src.trim(),from:g.from,mode:g.mode,shift:0,breaks:[]}); SEL=null; e.target.value=''; render(); };
+  Object.assign(S,{title:g.title,src:g.src.trim(),from:g.from,mode:g.mode,shift:0,breaks:[],manual:false}); SEL=null; e.target.value=''; render(); };
 $('titleIn').oninput=e=>{S.title=e.target.value; render();};
 $('src').oninput=e=>{S.src=e.target.value; render();};
 $('fromKey').onchange=e=>{S.from=e.target.value; render();};
-$('mode').onchange=e=>{S.mode=e.target.value; render();};
 $('up').onclick=()=>{S.shift=((S.shift+1+5)%12)-5; render();};
 $('down').onclick=()=>{S.shift=((S.shift-1+5+12)%12)-5; render();};
 $('reset').onclick=()=>{S.shift=0; render();};
 $('perRow').onclick=e=>{ if(e.target.dataset.n){S.per=+e.target.dataset.n; render();} };
 $('disp').onclick=e=>{ if(e.target.dataset.d){S.disp=e.target.dataset.d; render();} };
+$('manualCb').onchange=e=>{ if(e.target.checked) freezeLayout(); else { S.manual=false; S.breaks=[]; } render(); };
 $('sub').onchange=e=>{S.sub=e.target.value; render();};
 $('breakSec').onchange=e=>{S.breakSec=e.target.checked; render();};
 $('fs').oninput=e=>{S.fs=+e.target.value; render();};
@@ -538,7 +577,7 @@ async function makePDF(){
 $('pdf').onclick=makePDF;
 
 // ---------- save / load as file ----------
-const SAVE_KEYS=['title','src','from','mode','shift','per','breakSec','fs','gap','disp','sub','breaks'];
+const SAVE_KEYS=['title','src','from','mode','shift','per','manual','breakSec','fs','gap','disp','sub','breaks'];
 $('saveFile').onclick=()=>{
   const data={app:'chord-chart',v:1}; SAVE_KEYS.forEach(k=>data[k]=S[k]);
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
@@ -553,6 +592,8 @@ $('fileIn').onchange=async e=>{
     const d=JSON.parse(await f.text());
     if(d.app!=='chord-chart' || typeof d.src!=='string') throw new Error('形式が違います');
     SAVE_KEYS.forEach(k=>{ if(d[k]!==undefined) S[k]=d[k]; });
+    if(!(S.per>=1)){ S.per=4; S.manual=true; }
+    toMajor(d); S.from=d.from!==undefined?d.from:S.from; S.mode='maj';
     render();
   }catch(err){ alert('読み込めませんでした: '+err.message); }
 };
