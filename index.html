@@ -147,8 +147,8 @@ button:active{transform:translateY(1px)}
       <div class="row" style="margin-bottom:8px">
         <button id="saveFile">💾 ファイルに保存</button>
         <button id="loadFile">📂 ファイルを開く</button>
-        <button id="loadPdf">📄 PDFを読み込む</button>
-        <input id="pdfIn" type="file" accept=".pdf,application/pdf" style="display:none">
+        <button id="loadPdf">📄 PDF・画像を読み込む</button>
+        <input id="pdfIn" type="file" multiple accept=".pdf,application/pdf,image/png,image/jpeg,image/webp" style="display:none">
         <input id="fileIn" type="file" accept=".json,.chord,application/json" style="display:none">
       </div>
       <div class="hint" id="importMsg" style="margin:-2px 0 8px"></div>
@@ -539,7 +539,8 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape' && SEL!==null){ SEL
 // ---------- edit a chord in place ----------
 function curFlats(){ return useFlats((keyPc(S.from)+S.shift+120)%12, S.mode); }
 function dispTok(t){ return parseChord(t) ? transposeTok(t,S.shift,curFlats()) : t; }   // as shown on screen
-function srcTok(v){ v=v.trim(); return parseChord(v) ? transposeTok(v,-S.shift,useFlats(keyPc(S.from),S.mode)) : v; }  // back to the original key
+function srcTok1(v){ return parseChord(v) ? transposeTok(v,-S.shift,useFlats(keyPc(S.from),S.mode)) : v; }  // back to the original key
+function srcTok(v){ return v.trim().split(/\s+/).map(srcTok1).join(' '); }
 function editSrc(fn){ S.src=fn(S.src); render(); }
 $('chOk').onclick=()=>{ const v=$('chIn').value.trim(); if(!v||SELCH===null) return;
   const [a,b]=BARS[SEL].pos[SELCH]; editSrc(x=>x.slice(0,a)+srcTok(v)+x.slice(b)); };
@@ -552,7 +553,7 @@ function goChord(d){
 }
 $('chPrev').onclick=()=>goChord(-1);
 $('chNext').onclick=()=>goChord(1);
-$('chIn').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('chOk').click(); goChord(e.shiftKey?-1:1); } e.stopPropagation(); };
+$('chIn').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); const nw=$('chIn').value.trim().split(/\s+/).length; $('chOk').click(); goChord(e.shiftKey?-1:nw); } e.stopPropagation(); };
 $('chDel').onclick=()=>{ if(SELCH===null) return; const [a,b]=BARS[SEL].pos[SELCH];
   editSrc(x=>x.slice(0,a)+x.slice(b).replace(/^ /,'')); SELCH=null; render(); };
 $('chAdd').onclick=()=>{ if(SELCH===null) return; const [a,b]=BARS[SEL].pos[SELCH];
@@ -666,12 +667,68 @@ function guessKey(ch){
   const minor=/^m(?!aj)/.test(c.q) || /^min/.test(c.q);
   return KEYS[(c.root+(minor?3:0))%12];
 }
+// ---------- images (PNG/JPG): detect rows and bars, chords are typed in by hand ----------
+const fileToURL=f=>new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(r.error); r.readAsDataURL(f); });
+async function readImages(files){
+  const rows=[], pages=[];
+  for(const f of files){
+    const url=await fileToURL(f); pages.push(url);
+    const im=new Image(); im.src=url; await im.decode();
+    const W=Math.min(im.width,1600), H=Math.round(im.height*W/im.width), u=W/1190;   // analyse at (about) native size: thin lines stay sharp
+    const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+    const ctx=cv.getContext('2d',{willReadFrequently:true}); ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
+    ctx.imageSmoothingQuality='high'; ctx.drawImage(im,0,0,W,H);
+    const px=ctx.getImageData(0,0,W,H).data;
+    // try a few darkness thresholds (scans differ in how faint / blurred the lines are); keep the one with the most complete 5-line staves
+    let best=null;
+    for(const thr of [215,228,238]){
+      const dk=(x,y)=>{ const i=(y*W+x)*4; return 0.299*px[i]+0.587*px[i+1]+0.114*px[i+2]<thr; };
+      const lineRows=[];
+      for(let y=0;y<H;y++){   // a staff line is one long unbroken run (text rows are fragmented); short staves count too
+        let run=0,best=0,gap=0;
+        for(let x=0;x<W;x++){ if(dk(x,y)){ run+=1+gap; gap=0; if(run>best) best=run; } else if(run&&++gap>2){ run=0; gap=0; } }
+        if(best>W*0.25) lineRows.push(y); }
+      const lines=[]; for(const y of lineRows){ const l=lines[lines.length-1]; if(l&&y-l.b<=2) l.b=y; else lines.push({a:y,b:y}); }
+      const sts=[]; for(const l of lines){ const st=sts[sts.length-1];
+        if(st&&l.a-st.bottom<=45*u){ st.bottom=l.b; st.n++; st.lines.push(l); } else sts.push({top:l.a,bottom:l.b,n:1,lines:[l]}); }
+      const full=sts.filter(t=>t.n>=5&&t.n<=6).length;
+      if(!best||full>best.full) best={dk,staves:sts,full};
+    }
+    const dark=best.dk, staves=best.staves;
+    for(const st of staves.filter(t=>t.n>=3)){
+      const hh=st.bottom-st.top+1, runs=[]; let run=null;
+      for(let x=0;x<W;x++){ let c=0; for(let y=st.top;y<=st.bottom;y++) if(dark(x,y)) c++;
+        if(c>=hh*0.9){ if(run&&x-run.b<=2) run.b=x; else { run={a:x,b:x}; runs.push(run);} } }
+      const bl=[]; runs.forEach(r=>{ const cx=(r.a+r.b)/2; if(bl.length&&cx-bl[bl.length-1]<W*0.03) bl[bl.length-1]=cx; else bl.push(cx); });   // double bars / repeat signs count once
+      if(bl.length<2) continue;
+      // intervals between bar lines; drop a leading one that is full of ink (clef / key signature)
+      const isLine=y=>st.lines.some(l=>y>=l.a-1&&y<=l.b+1);
+      const ink=(x0,x1)=>{ let d=0,t=0; for(let x=Math.ceil(x0)+3;x<x1-3;x++) for(let y=st.top;y<=st.bottom;y++){ if(isLine(y)) continue; t++; if(dark(x,y)) d++; } return t? d/t : 0; };
+      let n=bl.length-1;
+      if(n>=1 && ink(bl[0],bl[1])>0.08) n--;
+      if(n<1) continue;
+      rows.push(Array(n).fill('?').join(' | ')+' |');
+    }
+  }
+  return {rows,pages};
+}
+
 $('loadPdf').onclick=()=>$('pdfIn').click();
 $('pdfIn').onchange=async e=>{
-  const f=e.target.files[0]; e.target.value=''; if(!f) return;
+  const files=[...e.target.files]; e.target.value=''; const f=files[0]; if(!f) return; e.target.__files=files;
   const msg=$('importMsg'), btn=$('loadPdf'), label=btn.textContent;
   btn.disabled=true; btn.textContent='読み取り中…'; msg.textContent='';
   try{
+    if(f.type.startsWith('image/')){
+      const imgs=[...e.target.__files].filter(x=>x.type.startsWith('image/')).sort((a,b)=>a.name.localeCompare(b.name,'ja',{numeric:true}));
+      const r=await readImages(imgs);
+      if(!r.rows.length) throw new Error('五線を見つけられませんでした');
+      Object.assign(S,{src:r.rows.join('\n'), shift:0, breaks:[], manual:false});
+      SEL=null; SELCH=null; setPages(r.pages); S.view='split'; renderOrig(); render();
+      const q=document.querySelector('.bar .tok'); if(q) q.click();
+      msg.textContent=`${r.rows.length} 段、${r.rows.reduce((a,x)=>a+x.split('|').length-1,0)} 小節を見つけました。画像からコードは読み取れないので、原本を見ながら「?」を順に入力してください。入力欄には「Cm G7」のように、1小節に複数のコードを書けます(Enter で次の小節へ進みます)。元のキーも、必要なら選び直してください。`;
+      return;
+    }
     const r=await readPdf(f);
     if(!r.nChords) throw new Error('コードを見つけられませんでした(画像だけのPDFは読み取れません)');
     Object.assign(S,{src:r.rows.join('\n'), from:guessKey(r.firstChord), mode:'maj', shift:0, breaks:[], manual:false});
