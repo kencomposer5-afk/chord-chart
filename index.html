@@ -159,6 +159,7 @@ button:active{transform:translateY(1px)}
       </div>
       <div class="hint" id="importMsg" style="margin:-2px 0 8px"></div>
       <input id="titleIn" type="text" placeholder="曲名">
+      <input id="creditIn" type="text" placeholder="作曲・作詞など(任意)" style="margin-top:6px">
       <label>コード(<code>|</code> で小節、<code>[A]</code> でセクション)</label>
       <textarea id="src" spellcheck="false"></textarea>
       <div class="hint">
@@ -239,7 +240,7 @@ button:active{transform:translateY(1px)}
     </div>
   </div>
   <div id="sheet">
-    <div id="title"></div><div id="meta"></div><div id="chart"></div>
+    <div id="title"></div><div id="credit" style="text-align:center;font-size:12px;color:var(--sub);margin:-2px 0 2px"></div><div id="meta"></div><div id="chart"></div>
   </div></div>
   <div id="origPane">
     <div class="orow ctrl"><b>原本(読み込んだPDF)</b>
@@ -362,6 +363,7 @@ const S = {
   per:   store.get('per',4),
   manual: store.get('manual',false),
   view:  store.get('view','chart'),
+  credit: store.get('credit',''),
   breakSec: store.get('breakSec',true),
   fs:    store.get('fs',24),
   gap:   store.get('gap',18),
@@ -408,7 +410,7 @@ function render(){
   $('gap').value=S.gap; $('gapv').textContent=S.gap+'px';
 
   // chart
-  $('title').textContent = S.title;
+  $('title').textContent = S.title; $('credit').textContent = S.credit||''; if($('creditIn').value!==(S.credit||'')) $('creditIn').value=S.credit||'';
   $('meta').textContent = `Key: ${toName}${S.mode==='min'?'m':''}` + (semi? `(原曲 ${S.from}${S.mode==='min'?'m':''})`:'');
   const sheet = $('chart'); sheet.innerHTML=''; sheet.style.setProperty('--fs', S.fs+'px');
   sheet.style.setProperty('--gap', S.gap+'px'); sheet.style.setProperty('--sp', (S.fs*0.3)+'px'); sheet.style.fontSize = S.fs+'px';
@@ -586,7 +588,7 @@ function splitChords(str){            // "CmG7" -> ["Cm","G7"]
 async function readPdf(file){
   await loadPdfJs();
   const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
-  const rows=[], pages=[]; let title='', firstChord=null, nChords=0;
+  const rows=[], pages=[]; let title='', credit='', firstChord=null, nChords=0;
   for(let pn=1; pn<=pdf.numPages; pn++){
     const page=await pdf.getPage(pn), SC=2, vp=page.getViewport({scale:SC});
     const W=Math.ceil(vp.width), H=Math.ceil(vp.height);
@@ -615,7 +617,8 @@ async function readPdf(file){
       if(prev){ prev.s+=r.s; prev.w=r.x+r.w-prev.x; } else toks.push({...r});
     }
     if(pn===1){ const big=toks.filter(t=>!staffs.some(st=>t.y>st.top-170)||t.y<(staffs[0]?staffs[0].top-170:H)).sort((a,b)=>b.h-a.h)[0];
-      if(big&&big.s.length>1) title=big.s; }
+      if(big&&big.s.length>1) title=big.s;
+      credit=toks.filter(t=>CREDIT_RE.test(t.s)).map(t=>tidyJa(t.s)).join(' / '); }
     // 3) classify tokens
     const cands=[];
     for(const t of toks){
@@ -669,7 +672,7 @@ async function readPdf(file){
       rows.push(parts.join(' | ')+' |');
     }
   }
-  return {rows,title,firstChord,nChords,pages};
+  return {rows,title,credit,firstChord,nChords,pages};
 }
 function guessKey(ch){
   const c=parseChord(ch); if(!c) return 'C';
@@ -734,12 +737,18 @@ async function finishImageImport(r,msg){
   SEL=null; SELCH=null; setPages(r.pages,r.geo); S.view='split'; renderOrig(); render();
   const q=document.querySelector('.bar .tok'); if(q) q.click();
   const nb=r.rows.reduce((a,x)=>a+x.split('|').length-1,0);
-  msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。コードを自動で読み取っています…(初回は少し時間がかかり、ネット接続が必要です)`;
+  let metaNote='';
+  try{
+    msg.textContent='題名を読み取っています…(初回は日本語のデータを取るので、少し時間がかかります)';
+    const m=await detectMeta();
+    if(m&&m.title){ S.title=m.title; S.credit=m.credit||''; render(); metaNote=` 題名「${m.title}」`+(m.credit?`、${m.credit}`:'')+' を読み取りました(読み違いがあれば直してください)。'; }
+  }catch(err){ metaNote=''; }
+  msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。${metaNote} コードを自動で読み取っています…(初回は少し時間がかかり、ネット接続が必要です)`;
   try{
     const {res,conf}=await autoRead((i,n)=>{ msg.textContent=`コードを自動で読み取り中… ${i+1}/${n} 小節`; });
     applyOcr(res,conf);
     const got=res.filter(x=>x!=='?').length, low=[...UNVER.values()].filter(v=>v==='low').length;
-    msg.textContent=`${r.rows.length} 段、${nb} 小節。自動で ${got} 小節にコードを入れました(自信の高さで、緑・黄・赤の点線で囲んであります。赤は ${low} 小節)。精度は低く(合っているのは3〜5割程度。緑の小節は約9割、赤の小節はほとんど間違いです)、♯や「7」が落ちることが多いです。原本の拡大を見ながら、コードをクリックして直してください。見た小節の点線は消えます。読み取れなかった小節は「?」です。`;
+    msg.textContent=`${metaNote} ${r.rows.length} 段、${nb} 小節。自動で ${got} 小節にコードを入れました(自信の高さで、緑・黄・赤の点線で囲んであります。赤は ${low} 小節)。精度は低く(合っているのは3〜5割程度。緑の小節は約9割、赤の小節はほとんど間違いです)、♯や「7」が落ちることが多いです。原本の拡大を見ながら、コードをクリックして直してください。見た小節の点線は消えます。読み取れなかった小節は「?」です。`;
   }catch(err){
     msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。自動読み取りは使えませんでした(${err.message})。原本を見ながら「?」を入力してください(Enter で次の小節へ進みます)。`;
   }
@@ -763,6 +772,7 @@ $('pdfIn').onchange=async e=>{
     }
     Object.assign(S,{src:r.rows.join('\n'), from:guessKey(r.firstChord), mode:'maj', shift:0, breaks:[], manual:false});
     if(r.title) S.title=r.title;
+    S.credit=r.credit||'';
     SEL=null; SELCH=null; setPages(r.pages); S.view='split'; renderOrig(); render();
     msg.textContent=`読み取りました: ${r.nChords} コード、${r.rows.length} 段。違うところは、コードをクリックして直してください(Enter で次のコードへ進みます)。右(下)に原本を並べています。元のキーは自動で推測した値です。`;
   }catch(err){ msg.textContent=''; alert('PDFを読み取れませんでした: '+err.message); }
@@ -935,14 +945,16 @@ async function applyVisionJson(files){
     }
     res.push(ch.length?ch.join(' '):'?'); conf.push(ch.length?cmin:0);
   }
-  return {res,conf};
+  let meta=null; try{ const d0=data[0], g0=BARGEO[0]; if(d0&&g0){ const sy0=d0.height? PAGES.length&&(await new Promise(r=>{const i=new Image(); i.onload=()=>r(i.height/d0.height); i.src=PAGES[0];})) :1; meta=metaFromItems((d0.items||[]).map(it=>({t:it.t,x:it.x,y:it.y*sy0,w:it.w,h:it.h*sy0})),g0.c0); } }catch(e){}
+  return {res,conf,meta};
 }
 $('loadOcr').onclick=()=>{ if(!PAGES.length||!BARGEO.length){ alert('先に「PDF・画像を読み込む」でPNGを読み込んでください。'); return; } $('ocrIn').click(); };
 $('ocrIn').onchange=async e=>{
   const files=[...e.target.files]; e.target.value=''; if(!files.length) return;
   const msg=$('importMsg');
   try{
-    const {res,conf}=await applyVisionJson(files);
+    const {res,conf,meta}=await applyVisionJson(files);
+    if(meta&&meta.title){ S.title=meta.title; S.credit=meta.credit||''; }
     // put the recognised chords into the skeleton ("?" per bar) of the current image
     const byRow=new Map(); BARGEO.forEach(g=>byRow.set(g.row,(byRow.get(g.row)||0)+1));
     S.src=[...byRow.values()].map(n=>Array(n).fill('?').join(' | ')+' |').join('\n'); S.breaks=[]; S.manual=false;
@@ -952,10 +964,51 @@ $('ocrIn').onchange=async e=>{
   }catch(err){ alert('認識結果を読み込めませんでした: '+err.message); }
 };
 
+// ---------- title and credits above the first staff ----------
+const CJK='[\\u3000-\\u30ff\\u3400-\\u9fff\\uff00-\\uffef]';
+const tidyJa=t=>t.replace(new RegExp('(?<='+CJK+')\\s+(?=['+'\\d\\u3000-\\u30ff\\u3400-\\u9fff\\uff00-\\uffef'+'])','g'),'').replace(new RegExp('(?<=\\d)\\s+(?='+CJK+')','g'),'').replace(/…/g,'〜').replace(/\s{2,}/g,' ').trim();
+const CREDIT_RE=/(Composed|Words|Lyrics|Music|Arranged|作曲|作詞|編曲)/;
+function pickTitle(lines){          // lines: [{t,h,conf}] from the header band of page 1
+  let title='', credit=[], bestH=0;
+  for(const l of lines){
+    const t=tidyJa(l.t||''); if(!t) continue;
+    const m=CREDIT_RE.exec(t);
+    if(m){ credit.push(t.slice(m.index)); continue; }
+    if(/^[\s\d!-\/:-@\[-`{-~]*$/.test(t)||(l.conf!=null&&l.conf<25)) continue;     // noise (ASCII symbols / digits only)
+    if(l.h>bestH){ bestH=l.h; title=t; }
+  }
+  return {title,credit:credit.join(' / ')};
+}
+let tessJpn=null;
+async function getTessJpn(){
+  if(tessJpn) return tessJpn;
+  if(!window.Tesseract) await loadScript(TESS+'tesseract.min.js');
+  const w=await Tesseract.createWorker('jpn+eng',1,{workerPath:TESS+'worker.min.js',corePath:'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0'});
+  await w.setParameters({tessedit_pageseg_mode:'6'});
+  return (tessJpn=w);
+}
+async function detectMeta(){          // page 1, region above the first staff's chord row
+  if(!PAGES.length||!BARGEO.length) return null;
+  const g=BARGEO.find(b=>b.p===0)||BARGEO[0], im=new Image(); im.src=PAGES[0]; await im.decode();
+  const y1=Math.round(g.c0-g.q*0.3); if(y1<30) return null;
+  const k=3, cv=document.createElement('canvas'); cv.width=im.width*k; cv.height=y1*k;
+  const c=cv.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height); c.imageSmoothingQuality='high'; c.drawImage(im,0,0,im.width,y1,0,0,cv.width,cv.height);
+  const w=await getTessJpn(), r=await w.recognize(cv,{},{blocks:true}), lines=[];
+  (r.data.blocks||[]).forEach(bl=>bl.paragraphs.forEach(pa=>pa.lines.forEach(l=>lines.push({t:l.text,h:(l.bbox.y1-l.bbox.y0)/k,conf:l.confidence}))));
+  return pickTitle(lines);
+}
+function metaFromItems(items,y1){      // Vision JSON: words above y1 -> lines -> title / credit
+  const its=items.filter(o=>o.y+o.h/2<y1).sort((a,b)=>a.y-b.y), lines=[];
+  for(const o of its){ const L=lines.find(l=>Math.abs(l.cy-(o.y+o.h/2))<0.6*Math.max(l.h,o.h));
+    if(L){ L.w.push(o); L.h=Math.max(L.h,o.h); } else lines.push({cy:o.y+o.h/2,h:o.h,w:[o]}); }
+  return pickTitle(lines.map(l=>({t:l.w.sort((a,b)=>a.x-b.x).map(o=>o.t).join(' '),h:l.h})));
+}
+
 // ---------- events ----------
 $('songSel').onchange=e=>{ const g=SONGS[e.target.value]; if(!g) return;
   Object.assign(S,{title:g.title,src:g.src.trim(),from:g.from,mode:g.mode,shift:0,breaks:[],manual:false}); SEL=null; e.target.value=''; render(); };
 $('titleIn').oninput=e=>{S.title=e.target.value; render();};
+$('creditIn').oninput=e=>{S.credit=e.target.value; render();};
 $('src').oninput=e=>{S.src=e.target.value; render();};
 $('fromKey').onchange=e=>{S.from=e.target.value; render();};
 $('up').onclick=()=>{S.shift=((S.shift+1+5)%12)-5; render();};
@@ -1027,7 +1080,7 @@ async function makePDF(){
 $('pdf').onclick=makePDF;
 
 // ---------- save / load as file ----------
-const SAVE_KEYS=['title','src','from','mode','shift','per','manual','breakSec','fs','gap','disp','sub','breaks'];
+const SAVE_KEYS=['title','credit','src','from','mode','shift','per','manual','breakSec','fs','gap','disp','sub','breaks'];
 $('saveFile').onclick=()=>{
   const data={app:'chord-chart',v:1}; SAVE_KEYS.forEach(k=>data[k]=S[k]);
   const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});

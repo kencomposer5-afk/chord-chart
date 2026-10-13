@@ -40,7 +40,7 @@ guard let big = ctx.makeImage() else { exit(1) }
 let request = VNRecognizeTextRequest()
 request.recognitionLevel = .accurate
 request.usesLanguageCorrection = false
-request.recognitionLanguages = ["en-US"]
+request.recognitionLanguages = ["ja-JP", "en-US"]   // titles are often Japanese
 request.minimumTextHeight = 0
 
 do {
