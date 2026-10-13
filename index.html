@@ -97,6 +97,7 @@ button:active{transform:translateY(1px)}
   background:var(--panel);border:1px solid var(--accent);border-radius:10px;padding:8px 10px;margin-bottom:12px;font-size:13px}
 .barbar button{padding:6px 10px;font-size:14px}
 .barbar button:disabled{opacity:.35;cursor:default}
+.barbar button.on{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
 .barbar .msg{color:var(--sub);flex:1;min-width:8em}
 .nosel-hint{font-size:12px;color:var(--sub);margin:0 0 10px;text-align:center}
 .head{flex:0 0 auto;align-self:flex-end}
@@ -239,6 +240,15 @@ button:active{transform:translateY(1px)}
     <button id="bReset" title="手動で付けた段の区切りをすべて消す">段をリセット</button>
     <button id="bClose">✕</button>
     <div id="lensWrap" style="display:none;flex-basis:100%;margin-top:4px"><div class="hint" style="margin:0 0 2px">原本のこの小節(拡大)</div><canvas id="lens" style="max-width:100%;border:1px solid var(--border);border-radius:6px;background:#fff"></canvas></div>
+    <div id="markRow" style="flex-basis:100%;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px">
+      <span>セクション:</span>
+      <input id="secIn" list="secList" style="width:7em" placeholder="Aメロ" autocomplete="off">
+      <datalist id="secList"><option>Intro</option><option>Aメロ</option><option>Bメロ</option><option>サビ</option><option>間奏</option><option>Outro</option><option>A</option><option>B</option><option>C</option><option>D</option></datalist>
+      <button id="secSet">付ける</button>
+      <button id="repS" title="この小節からリピート">|: 開始</button>
+      <button id="repE" title="この小節でリピートの終わり">:| 終わり</button>
+      <select id="markSel"><option value="">記号を足す…</option><option>×2</option><option>1.</option><option>2.</option><option>D.S.</option><option>D.C.</option><option>to Coda</option><option>Coda</option><option>Segno</option><option>Fine</option></select>
+    </div>
     <div id="chEdit" style="display:none;flex-basis:100%;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px">
       <span>コード:</span>
       <input id="chIn" type="text" style="width:9em" autocomplete="off" spellcheck="false">
@@ -330,11 +340,11 @@ function transposeTok(tok, semi, flats){
 // ---------- parse ----------
 function parse(text){
   const toks = [...text.matchAll(/\|\||\|:|:\||\||\[[^\]]+\]|\S+?(?=\||$|\s)|\S+/g)];
-  const bars = []; let cur = {chords:[],pos:[]}; let pendLabel=null, pendStart=false;
+  const bars = []; let cur = {chords:[],pos:[]}; let pendLabel=null, pendStart=false, pendLabelPos=null, pendStartPos=null;
   const flush = () => {
     if (cur.chords.length || cur.rs || cur.re){
-      if (pendLabel){cur.label=pendLabel; pendLabel=null;}
-      if (pendStart){cur.rs=true; pendStart=false;}
+      if (pendLabel){cur.label=pendLabel; cur.labelPos=pendLabelPos; pendLabel=null;}
+      if (pendStart){cur.rs=true; cur.rsPos=pendStartPos; pendStart=false;}
       bars.push(cur);
     }
     cur = {chords:[],pos:[]};
@@ -342,14 +352,14 @@ function parse(text){
   for (const m of toks){
     const t=m[0];
     if (t==='|'||t==='||') flush();
-    else if (t==='|:'){ flush(); pendStart=true; }
-    else if (t===':|'){ if(cur.chords.length){cur.re=true;} else if(bars.length){bars[bars.length-1].re=true;} flush(); }
-    else if (/^\[.+\]$/.test(t)){ flush(); pendLabel=t.slice(1,-1); }
+    else if (t==='|:'){ flush(); pendStart=true; pendStartPos=[m.index,m.index+2]; }
+    else if (t===':|'){ const rp=[m.index,m.index+2]; if(cur.chords.length){cur.re=true; cur.rePos=rp;} else if(bars.length){bars[bars.length-1].re=true; bars[bars.length-1].rePos=rp;} flush(); }
+    else if (/^\[.+\]$/.test(t)){ flush(); pendLabel=t.slice(1,-1); pendLabelPos=[m.index,m.index+t.length]; }
     else if (/^\(\d{1,2}\/\d{1,2}\)$/.test(t)){ cur.ts=t.slice(1,-1); }   // time signature, e.g. (2/4)
     else {
       if (!cur.chords.length){
-        if (pendLabel){cur.label=pendLabel; pendLabel=null;}
-        if (pendStart){cur.rs=true; pendStart=false;}
+        if (pendLabel){cur.label=pendLabel; cur.labelPos=pendLabelPos; pendLabel=null;}
+        if (pendStart){cur.rs=true; cur.rsPos=pendStartPos; pendStart=false;}
       }
       cur.chords.push(t); cur.pos.push([m.index, m.index+t.length]);
     }
@@ -546,6 +556,7 @@ function updateBarBar(){
   $('bSplit').disabled= first;
   $('bJoin').disabled = !(first && SEL>0);
   drawLens(); markOrig();
+  { const b=BARS[SEL]||{}; if(document.activeElement!==$('secIn')) $('secIn').value=b.label||''; $('repS').classList.toggle('on',!!b.rs); $('repE').classList.toggle('on',!!b.re); }
   const ce=$('chEdit'); ce.style.display = SELCH===null ? 'none' : 'flex';
   if (SELCH!==null){ const t=BARS[SEL].chords[SELCH]; if(document.activeElement!==$('chIn')) $('chIn').value=dispTok(t); $('chIn').dataset.k=SEL+':'+SELCH; }
 }
@@ -857,6 +868,7 @@ async function readImageURLs(urls){
       const n=starts.length-1;
       if(n<1) continue;
       const q=(st.bottom-st.top)/4;
+      let stFrames=[];
       const staffTokens=()=>{
         const y0=Math.max(0,Math.round(st.top-5.6*q)), y1=st.top-2, h=y1-y0; if(h<q*2) return [];
         const lab=new Int32Array(W*h), comps=[], ink=(x,y)=>{ const i=((y0+y)*W+x)*4; return 0.299*px[i]+0.587*px[i+1]+0.114*px[i+2]<150; };
@@ -867,7 +879,16 @@ async function readImageURLs(urls){
             for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ const nx=cx+dx, ny=cy+dy; if(nx<0||ny<0||nx>=W||ny>=h||lab[ny*W+nx]||!ink(nx,ny)) continue; lab[ny*W+nx]=id; stk.push([nx,ny]); } }
           comps.push({a,b,c,d,n:pts.length,pts});
         }
-        const frames=comps.filter(c=>(c.b-c.a)>3*q&&(c.d-c.c)>1.4*q&&c.n<(c.b-c.a+1)*(c.d-c.c+1)*0.5);
+        const isBox=c=>{ const w=c.b-c.a+1, h=c.d-c.c+1; if(w<1.6*q||h<1.6*q||c.n>w*h*0.6) return false;
+          const rowN=new Map(), colN=new Map(); c.pts.forEach(([x,y])=>{ rowN.set(y,(rowN.get(y)||0)+1); colN.set(x,(colN.get(x)||0)+1); });
+          const edge=(m,from,to,len)=>{ for(let v=from;v<=to;v++) if((m.get(v)||0)>=len*0.75) return true; return false; };
+          return edge(rowN,c.d-2,c.d,w)&&edge(colN,c.a,c.a+2,h)&&edge(colN,c.b-2,c.b,h); };   // the top edge may lie above the chord row
+        const frames=comps.filter(isBox);
+        if(false) comps.forEach(c=>{ const w=c.b-c.a+1, h=c.d-c.c+1; if(w>=1.4*q&&h>=1.4*q&&w<10*q){ const rowN=new Map(), colN=new Map(); c.pts.forEach(([x,y])=>{ rowN.set(y,(rowN.get(y)||0)+1); colN.set(x,(colN.get(x)||0)+1); }); const mx=(m,f,t,l)=>{ let b=0; for(let v=f;v<=t;v++) b=Math.max(b,(m.get(v)||0)/l); return +b.toFixed(2); }; window.__dbgBox.push({x:c.a,w,h,q:+q.toFixed(1),fill:+(c.n/(w*h)).toFixed(2),top:mx(rowN,c.c,c.c+2,w),bot:mx(rowN,c.d-2,c.d,w),left:mx(colN,c.a,c.a+2,h),right:mx(colN,c.b-2,c.b,h)}); } });
+        stFrames=frames.map(f=>{      // boxed section labels (A, B, Intro...); find the real top edge above the chord row
+          let top=f.c+y0; const w=f.b-f.a+1;
+          for(let y=f.c+y0;y>=Math.max(0,f.c+y0-3*q);y--){ let n=0; for(let x=f.a;x<=f.b;x++){ const i=(y*W+x)*4; if(0.299*px[i]+0.587*px[i+1]+0.114*px[i+2]<150) n++; } if(n>=0.75*w){ top=y; break; } }
+          return {a:f.a,b:f.b,c:top,d:f.d+y0}; });
         let cs=comps.filter(c=>!frames.includes(c)&&!frames.some(B=>c.a>=B.a&&c.b<=B.b&&c.c>=B.c&&c.d<=B.d)&&c.n>=3&&(c.b-c.a)<8*q).sort((a,b)=>a.a-b.a);
         const merged=[];
         for(const c of cs){ const m=merged.find(t=>{ const ov=Math.min(t.b,c.b)-Math.max(t.a,c.a); return ov>0.5*Math.min(t.b-t.a+1,c.b-c.a+1)&&(Math.max(t.c,c.c)-Math.min(t.d,c.d))<0.6*q; });
@@ -890,7 +911,21 @@ async function readImageURLs(urls){
         const A=(w/GX)*(h/GY);
         return {w:+(w/q).toFixed(2),h:+(h/q).toFixed(2),g:Array.from(g,v=>+Math.min(1,v/Math.max(1,A)).toFixed(2))};
       };
-      for(let k=0;k<n;k++) geo.push({p:pi,row:rowNo,x0:starts[k]*sc,x1:starts[k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc,sig:sigOf(starts[k]+2,starts[k+1]-2),toks:stToks.filter(t=>t.cx>=starts[k]&&t.cx<starts[k+1]).map(t=>({...t.sig,acc:'',x:t.cx,_t:t.raw}))});
+      // repeat signs: two dots in the middle spaces just left (end) or right (start) of a bar line
+      const lineRow=y=>st.lines.some(l=>y>=l.a-1&&y<=l.b+1);
+      const barCols=new Set(); runs.forEach(r=>{ for(let x=r.a-1;x<=r.b+1;x++) barCols.add(x); });
+      const dotAt=(x,y)=>{ const r=Math.max(1,Math.round(q*0.3)); let n=0,t=0; for(let yy=Math.round(y-r);yy<=y+r;yy++){ if(lineRow(yy)) continue; for(let xx=Math.round(x-r);xx<=x+r;xx++){ if(xx<0||xx>=W||barCols.has(xx)) continue; t++; if(dark(xx,yy)) n++; } } return t>=4&&n/t>=0.4; };
+      const dotsBeside=(cx,side)=>{ for(let dx=0.4*q;dx<=1.7*q;dx+=1){ const x=cx+side*dx; if(dotAt(x,st.top+1.5*q)&&dotAt(x,st.top+2.5*q)&&!dotAt(x,st.top+0.5*q)&&!dotAt(x,st.top+3.5*q)&&!dotAt(x+side*0.6*q,st.top+1.5*q)&&!dotAt(x+side*0.6*q,st.top+2.5*q)) return true; } return false; };
+      for(let k=0;k<n;k++){
+        const xs=starts[k], xe=starts[k+1];
+        const startsHere=f=>starts.findIndex(x=>x>=f.a-q && x<=f.b+q)===k;
+        const fr=stFrames.find(f=>startsHere(f)) || stFrames.find(f=>starts.findIndex(x=>x>=f.a-q && x<=f.b+q)<0 && f.a>=(k===0?0:xs-q) && f.a<xe-q);
+        geo.push({p:pi,row:rowNo,x0:xs*sc,x1:xe*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc,
+          sig:sigOf(xs+2,xe-2),toks:stToks.filter(t=>t.cx>=xs&&t.cx<xe).map(t=>({...t.sig,acc:'',x:t.cx,_t:t.raw})),
+          lbox: fr? {x0:fr.a*sc,y0:fr.c*sc,x1:fr.b*sc,y1:fr.d*sc} : null,
+          rs: bl.some(x=>Math.abs(x-xs)<4)&&dotsBeside(xs,+1), re: bl.some(x=>Math.abs(x-xe)<4)&&dotsBeside(xe,-1)});
+        if(fr) stFrames=stFrames.filter(f=>f!==fr);
+      }
       rows.push(Array(n).fill('?').join(' | ')+' |'); rowNo++;
     }
   }
@@ -915,12 +950,15 @@ function layoutFromGeo(){          // one screen row per staff row of the origin
 }
 function skeletonFromGeo(){
   const byRow=new Map(); BARGEO.forEach(g=>byRow.set(g.row,(byRow.get(g.row)||0)+1));
-  S.src=[...byRow.values()].map(n=>Array(n).fill('?').join(' | ')+' |').join('\n'); layoutFromGeo();
+  const rows=new Map(); BARGEO.forEach(g=>{ const t=(g.label?`[${g.label}] `:'')+(g.rs?'|: ':'')+'?'+(g.re?' :|':''); (rows.get(g.row)||rows.set(g.row,[]).get(g.row)).push(t); });
+  S.src=[...rows.values()].map(r=>r.join(' | ')+' |').join('\n'); layoutFromGeo();
 }
 async function finishImageImport(r,msg){
   if(!r.rows.length) throw new Error('五線を見つけられませんでした');
   Object.assign(S,{src:r.rows.join('\n'), shift:0, breaks:[], manual:false});
-  SEL=null; SELCH=null; setPages(r.pages,r.geo); layoutFromGeo(); S.view='split'; renderOrig(); render();
+  SEL=null; SELCH=null; setPages(r.pages,r.geo); layoutFromGeo(); S.view='split'; renderOrig();
+  try{ await readSectionLabels(t=>{ msg.textContent=t; }); }catch(e){}
+  skeletonFromGeo(); render();
   const q=document.querySelector('.bar .tok'); if(q) q.click();
   const nb=r.rows.reduce((a,x)=>a+x.split('|').length-1,0);
   if(await florenceAvailable()){      // Florence-2 reader is running on this computer: best measured accuracy
@@ -1317,6 +1355,55 @@ async function autoReadFlorence(onProgress){
   const ty=pageAccTypes(RAWF); RAWF.forEach((c,i)=>{ if(c&&c.length) res[i]=fixBar(i,c,ty[BARGEO[i].p]).join(' '); });
   window.OCR_LAST_F={raw:RAWF.map(c=>c.join(' ')),res:res.slice()};
   return {res,conf};
+}
+
+// ---------- sections, repeats and road-map marks for the selected bar (edits the text) ----------
+function barEdit(fn){ const b=BARS[SEL]; if(!b||!b.pos.length) return; S.src=fn(S.src,b); render(); }
+const insAt=(src,at,txt)=>src.slice(0,at)+txt+src.slice(at);
+const cutAt=(src,[a,z],txt='')=>src.slice(0,a)+txt+src.slice(z);
+$('secSet').onclick=()=>{ const v=$('secIn').value.trim().replace(/[\[\]|]/g,'');
+  barEdit((x,b)=>{
+    if(b.labelPos) return v? cutAt(x,b.labelPos,`[${v}]`) : cutAt(x,[b.labelPos[0],b.labelPos[1]+(x[b.labelPos[1]]===' '?1:0)]);
+    if(!v) return x;
+    return insAt(x, b.rsPos? b.rsPos[0] : b.pos[0][0], `[${v}] `); }); };
+$('secIn').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('secSet').click(); } e.stopPropagation(); };
+// removing a repeat sign: drop it when another bar line is next to it, otherwise leave a plain bar line
+const prevChar=(x,i)=>{ while(i>0&&/\s/.test(x[i-1])) i--; return x[i-1]||''; };
+const nextChar=(x,i)=>{ while(i<x.length&&/\s/.test(x[i])) i++; return x[i]||''; };
+$('repS').onclick=()=>barEdit((x,b)=>{ if(!b.rsPos) return insAt(x,b.pos[0][0],'|: ');
+  const [a,z]=b.rsPos, before=prevChar(x,a); let e=z; while(x[e]===' ') e++;
+  return (before==='|'||before===']'||before==='') ? cutAt(x,[a,e]) : cutAt(x,b.rsPos,'|'); });
+$('repE').onclick=()=>barEdit((x,b)=>{ if(!b.rePos) return insAt(x,b.pos[b.pos.length-1][1],' :|');
+  const [a,z]=b.rePos, after=nextChar(x,z); let st=a; while(st>0&&x[st-1]===' ') st--;
+  return (after==='|'||after==='') ? cutAt(x,[st,z]) : cutAt(x,b.rePos,'|'); });
+$('markSel').onchange=e=>{ const v=e.target.value; e.target.value=''; if(!v) return; barEdit((x,b)=>insAt(x,b.pos[b.pos.length-1][1],' '+v)); };
+
+// ---------- boxed section labels in the picture (A / B / Intro ...) ----------
+let tessLabel=null;
+async function readSectionLabels(onMsg){
+  const boxes=BARGEO.filter(g=>g.lbox); if(!boxes.length) return 0;
+  const useF=await florenceAvailable(), imgs={}; let n=0;
+  if(!useF){ if(!window.Tesseract) await loadScript(TESS+'tesseract.min.js');
+    if(!tessLabel){ tessLabel=await Tesseract.createWorker('eng',1,{workerPath:TESS+'worker.min.js',corePath:'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0'});
+      await tessLabel.setParameters({tessedit_char_whitelist:'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789',tessedit_pageseg_mode:'7'}); } }
+  for(const g of boxes){
+    onMsg&&onMsg(`セクション名を読み取り中… ${++n}/${boxes.length}`);
+    let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
+    const b=g.lbox, i=3, sw=Math.round(b.x1-b.x0-2*i), sh=Math.round(b.y1-b.y0-2*i); if(sw<4||sh<4) continue;
+    const k=64/sh, cv=document.createElement('canvas'); cv.width=Math.round(sw*k)+40; cv.height=Math.round(sh*k)+40;
+    const c=cv.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height); c.imageSmoothingQuality='high';
+    c.drawImage(im,b.x0+i,b.y0+i,sw,sh,20,20,Math.round(sw*k),Math.round(sh*k));
+    let t='';
+    try{
+      if(useF){ const r=await fetch(FLORENCE+'/ocr',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:cv.toDataURL('image/png')})}); t=(await r.json()).text||''; }
+      else t=(await tessLabel.recognize(cv)).data.text||'';
+    }catch(e){}
+    t=t.replace(/[^A-Za-z0-9]/g,'');
+    if(/^[il1|]ntro$/i.test(t)) t='Intro'; else if(/^outro$/i.test(t)) t='Outro'; else if(t.length===1) t=t.toUpperCase();
+    if(t && !/^\d+$/.test(t)) g.label=t;
+  }
+  idb.set('bargeo',BARGEO).catch(()=>{});
+  return boxes.length;
 }
 
 // ---------- events ----------
