@@ -713,7 +713,7 @@ async function readImages(files){
       if(n>=1 && ink(bl[0],bl[1])>0.08){ n--; s0=1; }
       if(n<1) continue;
       const q=(st.bottom-st.top)/4;
-      for(let k=0;k<n;k++) geo.push({p:pi,x0:bl[s0+k]*sc,x1:bl[s0+k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc});
+      for(let k=0;k<n;k++) geo.push({p:pi,x0:bl[s0+k]*sc,x1:bl[s0+k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc});
       rows.push(Array(n).fill('?').join(' | ')+' |');
     }
   }
@@ -733,7 +733,16 @@ $('pdfIn').onchange=async e=>{
       Object.assign(S,{src:r.rows.join('\n'), shift:0, breaks:[], manual:false});
       SEL=null; SELCH=null; setPages(r.pages,r.geo); S.view='split'; renderOrig(); render();
       const q=document.querySelector('.bar .tok'); if(q) q.click();
-      msg.textContent=`${r.rows.length} 段、${r.rows.reduce((a,x)=>a+x.split('|').length-1,0)} 小節を見つけました。画像からコードは読み取れないので、原本を見ながら「?」を順に入力してください。入力欄には「Cm G7」のように、1小節に複数のコードを書けます(Enter で次の小節へ進みます)。元のキーも、必要なら選び直してください。`;
+      const nb=r.rows.reduce((a,x)=>a+x.split('|').length-1,0);
+      msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。コードを自動で読み取っています…(初回は少し時間がかかり、ネット接続が必要です)`;
+      try{
+        const res=await autoRead((i,n)=>{ msg.textContent=`コードを自動で読み取り中… ${i+1}/${n} 小節`; });
+        applyOcr(res);
+        const got=res.filter(x=>x!=='?').length;
+        msg.textContent=`${r.rows.length} 段、${nb} 小節。自動で ${got} 小節にコードを入れました。精度は低く(合っているのは3〜5割程度)、♯や「7」が落ちることが多いです。原本の拡大を見ながら、コードをクリックして直してください(Enter で次へ進みます)。読み取れなかった小節は「?」です。`;
+      }catch(err){
+        msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。自動読み取りは使えませんでした(${err.message})。原本を見ながら「?」を入力してください(Enter で次の小節へ進みます)。`;
+      }
       return;
     }
     const r=await readPdf(f);
@@ -783,6 +792,65 @@ function drawLens(){
     c.drawImage(im,sx,sy,sw,sh,0,0,cv.width,cv.height);
   };
   if(!im){ im=LENS_IMG[url]=new Image(); im.onload=draw; im.src=url; } else if(im.complete) draw(); else im.onload=draw;
+}
+
+// ---------- free automatic chord reading (Tesseract OCR in the browser; accuracy is modest) ----------
+const TESS='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/';
+let tessWorker=null;
+async function getTess(){
+  if(tessWorker) return tessWorker;
+  if(!window.Tesseract) await loadScript(TESS+'tesseract.min.js');
+  const w=await Tesseract.createWorker('eng',1,{workerPath:TESS+'worker.min.js',corePath:'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.1.0'});
+  await w.setParameters({tessedit_char_whitelist:'ABCDEFGmajdimsu0123456789#b/()+- ',tessedit_pageseg_mode:'7',preserve_interword_spaces:'1'});
+  return (tessWorker=w);
+}
+function cropForOcr(im,g){
+  const m=4, sx=Math.max(0,Math.round(g.x0+m)), sw=Math.round(g.x1-g.x0-2*m), sy=Math.max(0,Math.round(g.c0)), sh=Math.round(g.c1-g.c0);
+  if(sw<8||sh<8) return null;
+  const f=Math.max(1,Math.min(6,96/sh)), cw=Math.round(sw*f), ch=Math.round(sh*f);
+  const cv=document.createElement('canvas'); cv.width=cw+40; cv.height=ch+40;
+  const c=cv.getContext('2d',{willReadFrequently:true}); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height);
+  c.imageSmoothingQuality='high'; c.drawImage(im,sx,sy,sw,sh,20,20,cw,ch);
+  // erase boxed rehearsal marks (big hollow rectangles) and sharpen to black on white
+  const d=c.getImageData(0,0,cv.width,cv.height), W=cv.width,H=cv.height, a=d.data, dark=new Uint8Array(W*H);
+  for(let i=0;i<W*H;i++){ const v=0.299*a[i*4]+0.587*a[i*4+1]+0.114*a[i*4+2]; dark[i]=v<140?1:0; }
+  const seen=new Uint8Array(W*H), qpx=g.q*f;
+  for(let i=0;i<W*H;i++){ if(!dark[i]||seen[i]) continue;
+    const st=[i]; seen[i]=1; let x0=W,x1=0,y0=H,y1=0,n=0;
+    while(st.length){ const k=st.pop(), x=k%W, y=(k/W)|0; n++; if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y;
+      for(let dy=-1;dy<=1;dy++) for(let dx=-1;dx<=1;dx++){ const nx=x+dx, ny=y+dy; if(nx<0||ny<0||nx>=W||ny>=H) continue; const kk=ny*W+nx; if(dark[kk]&&!seen[kk]){ seen[kk]=1; st.push(kk); } } }
+    const bw=x1-x0+1, bh=y1-y0+1;
+    if(bw>2.2*qpx&&bh>1.6*qpx&&n<bw*bh*0.5){ for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++) dark[y*W+x]=0; }
+    else if(bw>6*qpx&&bh<0.8*qpx){ for(let y=y0;y<=y1;y++) for(let x=x0;x<=x1;x++) dark[y*W+x]=0; }     // brackets / lines
+  }
+  for(let i=0;i<W*H;i++){ const v=dark[i]?0:255; a[i*4]=a[i*4+1]=a[i*4+2]=v; a[i*4+3]=255; }
+  c.putImageData(d,0,0); return cv;
+}
+function ocrToChords(text){
+  const out=[];
+  for(const raw of text.replace(/\n/g,' ').split(/\s+/)){
+    if(!raw) continue;
+    for(const t of splitChords(raw)){ if(parseChord(t)) out.push(t); }
+  }
+  return out;
+}
+let OCR_RUNNING=false;
+async function autoRead(onProgress){
+  if(OCR_RUNNING) return 0; OCR_RUNNING=true;
+  try{
+    const w=await getTess(), res=[], imgs={};
+    for(let i=0;i<BARGEO.length;i++){
+      const g=BARGEO[i]; onProgress&&onProgress(i,BARGEO.length);
+      let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
+      const cv=cropForOcr(im,g); let ch=[];
+      if(cv){ const r=await w.recognize(cv); ch=ocrToChords(r.data.text); }
+      res.push(ch.length?ch.join(' '):'?');
+    }
+    return res;
+  } finally { OCR_RUNNING=false; }
+}
+function applyOcr(res){
+  let i=0; S.src=S.src.replace(/\?/g,()=>res[i++]||'?'); render();
 }
 
 // ---------- events ----------
