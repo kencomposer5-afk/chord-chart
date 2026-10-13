@@ -693,6 +693,55 @@ function clusterBars(geo){
       let d=0; for(let k=0;k<a.g.length;k++) d+=Math.abs(a.g[k]-b.g[k]); if(d/a.g.length<0.07) par[find(j)]=find(i); } }
   geo.forEach((g,i)=>{ g.cl=g.sig?find(i):-1; });
 }
+// a small raised sign just right of the root letter = sharp (two upright strokes) or flat (one stem + bowl)
+function strokesOf(pts,x0,x1,y0,y1){        // number of upright strokes in a box
+  const n=new Map(); pts.forEach(([x,y])=>{ if(x>=x0&&x<=x1&&y>=y0&&y<=y1) n.set(x,(n.get(x)||0)+1); });
+  let s=0,run=false; const h=y1-y0+1;
+  for(let x=x0;x<=x1;x++){ const tall=(n.get(x)||0)>=0.6*h; if(tall&&!run) s++; run=tall; }
+  return s;
+}
+// OCR often drops the small raised sharp/flat: put back the ones found in the picture (when chords and symbols line up 1:1)
+function fixAccidentals(i,chords){
+  const g=BARGEO[i]; if(!g||!g.toks||g.toks.length!==chords.length) return chords;
+  return chords.map((c,k)=>{ const a=g.toks[k].acc; const m=/^([A-G])([#b]?)(.*)$/.exec(c); if(!a||!m||m[2]) return c; return m[1]+a+m[3]; });   // only add a missing sign, never change one the OCR read
+}
+function accidentalOf(t,capH){
+  const parts=t.parts.slice().sort((a,b)=>a.a-b.a), root=parts[0]; if(!root) return '';
+  const H0=root.d-root.c+1;
+  if(capH && H0>capH*1.2 && H0<capH*1.8){   // the sign is fused with the letter and sticks out above the capital height
+    const top=root.d-capH;                   // rows above the normal capital top
+    const pr=root.pts.filter(([x,y])=>y<=top);
+    if(pr.length>=3){
+      let a=1e9,b=-1; pr.forEach(([x])=>{ if(x<a)a=x; if(x>b)b=x; });
+      // the whole sign: everything right of the protrusion's left edge, from the top down to about 3/4 of a capital
+      const x0=a-1, x1=Math.max(b+1,a+Math.round(0.45*capH)), y0=root.c, y1=Math.round(top+0.75*capH);
+      const sign=root.pts.filter(([x,y])=>x>=x0&&x<=x1&&y>=y0&&y<=y1);
+      const cnt=new Map(); sign.forEach(([x])=>cnt.set(x,(cnt.get(x)||0)+1));
+      const hh=y1-y0+1; let stems=0, run=false;
+      for(let x=x0;x<=x1;x++){ const tall=(cnt.get(x)||0)>=0.55*hh; if(tall&&!run) stems++; run=tall; }
+      if(stems>=2) return '#';
+      if(stems===1) return 'b';
+      return '#';
+    }
+  }
+  const H=capH||H0;
+  for(const p of parts.slice(1)){
+    const h=p.d-p.c+1, w=p.b-p.a+1;
+    if(p.a<root.b-0.3*H || p.a>root.b+0.6*H) continue;           // right next to the root letter
+    if(p.c>root.c+0.3*H || p.d>root.c+0.8*H) continue;            // raised: starts near the top of the root
+    if(h<0.3*H || h>0.85*H || w>0.6*H) continue;                  // small
+    // count upright strokes: columns whose ink spans most of the sign's height
+    const col=new Map(); p.pts.forEach(([x,y])=>{ const c=col.get(x)||{n:0}; c.n++; col.set(x,c); });
+    let strokes=0, inRun=false;
+    for(let x=p.a;x<=p.b;x++){ const tall=(col.get(x)||{n:0}).n>=0.6*h; if(tall&&!inRun) strokes++; inRun=tall; }
+    if(strokes>=2) return '#';
+    // flat: ink heavier in the lower half (the bowl)
+    let lo=0,hi=0; p.pts.forEach(([x,y])=>{ if(y>p.c+h/2) lo++; else hi++; });
+    if(strokes===1 && lo>hi*1.1) return 'b';
+    if(strokes===1) return '#';
+  }
+  return '';
+}
 async function readImages(files){ const urls=[]; for(const f of files) urls.push(await fileToURL(f)); return readImageURLs(urls); }
 async function readImageURLs(urls){
   const rows=[], pages=[], geo=[];
@@ -760,14 +809,14 @@ async function readImageURLs(urls){
         let cs=comps.filter(c=>!frames.includes(c)&&!frames.some(B=>c.a>=B.a&&c.b<=B.b&&c.c>=B.c&&c.d<=B.d)&&c.n>=3&&(c.b-c.a)<8*q).sort((a,b)=>a.a-b.a);
         const merged=[];
         for(const c of cs){ const m=merged.find(t=>{ const ov=Math.min(t.b,c.b)-Math.max(t.a,c.a); return ov>0.5*Math.min(t.b-t.a+1,c.b-c.a+1)&&(Math.max(t.c,c.c)-Math.min(t.d,c.d))<0.6*q; });
-          if(m){ m.a=Math.min(m.a,c.a); m.b=Math.max(m.b,c.b); m.c=Math.min(m.c,c.c); m.d=Math.max(m.d,c.d); m.pts=m.pts.concat(c.pts); } else merged.push({...c}); }
+          if(m){ m.a=Math.min(m.a,c.a); m.b=Math.max(m.b,c.b); m.c=Math.min(m.c,c.c); m.d=Math.max(m.d,c.d); m.pts=m.pts.concat(c.pts); } else merged.push({...c,pts:c.pts.slice()}); }
         const toks=[];
         for(const c of merged){ const t=toks[toks.length-1];
-          if(t&&c.a-t.b<=0.6*q){ t.b=Math.max(t.b,c.b); t.c=Math.min(t.c,c.c); t.d=Math.max(t.d,c.d); t.pts=t.pts.concat(c.pts); } else toks.push({a:c.a,b:c.b,c:c.c,d:c.d,pts:c.pts.slice()}); }
+          if(t&&c.a-t.b<=0.6*q){ t.b=Math.max(t.b,c.b); t.c=Math.min(t.c,c.c); t.d=Math.max(t.d,c.d); t.pts=t.pts.concat(c.pts); t.parts.push(c); } else toks.push({a:c.a,b:c.b,c:c.c,d:c.d,pts:c.pts.slice(),parts:[c]}); }
         return toks.map(t=>{ const w=t.b-t.a+1, hh=t.d-t.c+1, GX=16, GY=12, g=new Float32Array(GX*GY);
           t.pts.forEach(([x,y])=>g[Math.min(GY-1,Math.floor((y-t.c)/hh*GY))*GX+Math.min(GX-1,Math.floor((x-t.a)/w*GX))]++);
           const A=(w/GX)*(hh/GY);
-          return {cx:(t.a+t.b)/2, sig:{w:+(w/q).toFixed(2),h:+(hh/q).toFixed(2),g:Array.from(g,v=>+Math.min(1,v/Math.max(1,A)).toFixed(2))}}; });
+          return {cx:(t.a+t.b)/2, raw:t, sig:{w:+(w/q).toFixed(2),h:+(hh/q).toFixed(2),g:Array.from(g,v=>+Math.min(1,v/Math.max(1,A)).toFixed(2))}}; });
       };
       const stToks=staffTokens();
       const sigOf=(xa,xb)=>{      // look of the chord symbols in this bar (same font & size everywhere => same chords look the same)
@@ -779,9 +828,15 @@ async function readImageURLs(urls){
         const A=(w/GX)*(h/GY);
         return {w:+(w/q).toFixed(2),h:+(h/q).toFixed(2),g:Array.from(g,v=>+Math.min(1,v/Math.max(1,A)).toFixed(2))};
       };
-      for(let k=0;k<n;k++) geo.push({p:pi,row:rowNo,x0:starts[k]*sc,x1:starts[k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc,sig:sigOf(starts[k]+2,starts[k+1]-2),toks:stToks.filter(t=>t.cx>=starts[k]&&t.cx<starts[k+1]).map(t=>t.sig)});
+      for(let k=0;k<n;k++) geo.push({p:pi,row:rowNo,x0:starts[k]*sc,x1:starts[k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc,sig:sigOf(starts[k]+2,starts[k+1]-2),toks:stToks.filter(t=>t.cx>=starts[k]&&t.cx<starts[k+1]).map(t=>({...t.sig,acc:'',x:t.cx,_t:t.raw}))});
       rows.push(Array(n).fill('?').join(' | ')+' |'); rowNo++;
     }
+  }
+  // sharps / flats: needs the normal height of a capital letter on the page (median of the root letters)
+  for(let pg=0;pg<pages.length;pg++){
+    const tk=geo.filter(g=>g.p===pg).flatMap(g=>g.toks), hs=tk.map(t=>{ const r=t._t.parts.slice().sort((a,b)=>a.a-b.a)[0]; return r.d-r.c+1; }).sort((a,b)=>a-b);
+    const capH=hs.length? hs[Math.floor(hs.length*0.4)] : 0;
+    tk.forEach(t=>{ t.acc=accidentalOf(t._t,capH); delete t._t; });
   }
   clusterBars(geo);
   return {rows,pages,geo};
@@ -964,7 +1019,8 @@ async function autoRead(onProgress){
     for(let i=0;i<n;i++){
       onProgress&&onProgress(n+i,n*2); let ch=one[i];
       if(crops[i]){ const two=wordsToChords(ocrWords(await w.recognize(crops[i],{},{blocks:true}))); if(two.some(x=>x.c.includes('/'))) ch=two; }
-      res.push(ch.length?ch.map(x=>x.c).join(' '):'?'); conf.push(ch.length?Math.min(...ch.map(x=>x.conf)):0);
+      const fixed=fixAccidentals(i,ch.map(x=>x.c));
+      res.push(ch.length?fixed.join(' '):'?'); conf.push(ch.length?Math.min(...ch.map(x=>x.conf)):0);
     }
     window.OCR_LAST={one,res:res.slice(),conf:conf.slice()};
     // bars that look identical must hold the same chords: let every member of a cluster vote (weighted by confidence)
@@ -1023,7 +1079,7 @@ async function applyVisionJson(files){
 async function applyVisionData(data){        // data: one {width,height,items:[{t,x,y,w,h,c}]} per page
   if(!BARGEO.length||!PAGES.length) throw new Error('先にPNGを読み込んでください');
   const imgs={}, res=[], conf=[];
-  for(const g of BARGEO){
+  for(let gi=0;gi<BARGEO.length;gi++){ const g=BARGEO[gi];
     const d=data[Math.min(g.p,data.length-1)]; const q=g.q;
     let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
     const sx=d.width? im.width/d.width : 1, sy=d.height? im.height/d.height : 1;
@@ -1041,7 +1097,8 @@ async function applyVisionData(data){        // data: one {width,height,items:[{
         if(x.length===1&&/[A-H]/.test(x)&&await boxedItem(im,o,q)) continue;
         ch.push(x); cmin=Math.min(cmin,o.conf==null?100:o.conf); }
     }
-    res.push(ch.length?ch.join(' '):'?'); conf.push(ch.length?cmin:0);
+    const fx=fixAccidentals(gi,ch);
+    res.push(ch.length?fx.join(' '):'?'); conf.push(ch.length?cmin:0);
   }
   let meta=null; try{ const d0=data[0], g0=BARGEO[0]; if(d0&&g0){ const sy0=d0.height? PAGES.length&&(await new Promise(r=>{const i=new Image(); i.onload=()=>r(i.height/d0.height); i.src=PAGES[0];})) :1; meta=metaFromItems((d0.items||[]).map(it=>({t:it.t,x:it.x,y:it.y*sy0,w:it.w,h:it.h*sy0})),g0.c0); } }catch(e){}
   return {res,conf,meta};
