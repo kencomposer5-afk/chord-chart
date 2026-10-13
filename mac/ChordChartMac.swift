@@ -167,13 +167,42 @@ struct WebView: NSViewRepresentable {
         cfg.userContentController.addScriptMessageHandler(VisionBridge(), contentWorld: .page, name: "vision")
         let wv = WKWebView(frame: .zero, configuration: cfg)
         wv.navigationDelegate = context.coordinator
+        wv.uiDelegate = context.coordinator
+        if #available(macOS 13.3, *) { wv.isInspectable = true }     // Safari > Develop menu can then show the page's console
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { wv.load(URLRequest(url: url)) }   // let the local server come up
         return wv
     }
 
     func updateNSView(_ nsView: WKWebView, context: Context) {}
 
-    final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate {
+    final class Coordinator: NSObject, WKNavigationDelegate, WKDownloadDelegate, WKUIDelegate {
+        // <input type="file"> does nothing in a Mac WKWebView unless the app shows the open panel itself
+        func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters,
+                     initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping ([URL]?) -> Void) {
+            let panel = NSOpenPanel()
+            panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = false
+            panel.begin { result in completionHandler(result == .OK ? panel.urls : nil) }
+        }
+        // alert() / confirm() are silently ignored unless the app shows them
+        func webView(_ webView: WKWebView, runJavaScriptAlertPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping () -> Void) {
+            let a = NSAlert()
+            a.messageText = message
+            a.addButton(withTitle: "OK")
+            a.runModal()
+            completionHandler()
+        }
+        func webView(_ webView: WKWebView, runJavaScriptConfirmPanelWithMessage message: String,
+                     initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (Bool) -> Void) {
+            let a = NSAlert()
+            a.messageText = message
+            a.addButton(withTitle: "OK")
+            a.addButton(withTitle: "キャンセル")
+            completionHandler(a.runModal() == .alertFirstButtonReturn)
+        }
+
         func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
             decisionHandler(navigationAction.shouldPerformDownload ? .download : .allow)
