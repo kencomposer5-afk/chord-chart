@@ -804,7 +804,7 @@ async function finishImageImport(r,msg){
       const data=[]; for(let i=0;i<PAGES.length;i++) data.push(await window.webkit.messageHandlers.vision.postMessage({image:PAGES[i]}));
       const {res,conf,meta}=await applyVisionData(data);
       if(meta&&meta.title){ S.title=meta.title; S.credit=meta.credit||''; }
-      skeletonFromGeo(); applyOcr(res,conf); const nLib=applyLibrary();
+      skeletonFromGeo(); applyOcr(res,conf); const nLib=applyLibrary(); autoKey(); render();
       const got=res.filter(x=>x!=='?').length;
       msg.textContent=`${r.rows.length} 段、${nb} 小節。Macの文字認識(Vision)で、${got} 小節にコードを入れました。自信の高さで、緑・黄・赤の点線で囲んであります。原本の拡大を見ながら、違うところは、コードをクリックして直してください(直した見た目は覚えます)。`;
       return;
@@ -820,7 +820,7 @@ async function finishImageImport(r,msg){
   try{
     const {res,conf}=await autoRead((i,n)=>{ msg.textContent=`コードを自動で読み取り中… ${i+1}/${n} 小節`; });
     applyOcr(res,conf);
-    const nLib=applyLibrary();
+    const nLib=applyLibrary(); autoKey(); render();
     const got=res.filter(x=>x!=='?').length, low=[...UNVER.values()].filter(v=>v==='low').length;
     msg.textContent=`${metaNote} ${r.rows.length} 段、${nb} 小節。自動で ${got} 小節にコードを入れました(自信の高さで、緑・黄・赤の点線で囲んであります。赤は ${low} 小節)。精度は低く(合っているのは3〜5割程度。緑の小節は約9割、赤の小節はほとんど間違いです)、♯や「7」が落ちることが多いです。原本の拡大を見ながら、コードをクリックして直してください。見た小節の点線は消えます。読み取れなかった小節は「?」です。`;
   }catch(err){
@@ -975,6 +975,10 @@ async function autoRead(onProgress){
     return {res,conf};
   } finally { OCR_RUNNING=false; }
 }
+function autoKey(){          // the key of an image import is unknown: take the first chord as the tonic guess
+  for(const t of S.src.split(/[\s|]+/)){ if(parseChord(t)){ S.from=guessKey(t); S.shift=0; return t; } }
+  return null;
+}
 const UNVER=new Map();   // bar index -> 'low' | 'mid' : filled in by OCR and not looked at yet
 function applyOcr(res,conf){
   let i=0; S.src=S.src.replace(/\?/g,()=>res[i++]||'?');
@@ -1046,7 +1050,7 @@ $('ocrIn').onchange=async e=>{
     if(meta&&meta.title){ S.title=meta.title; S.credit=meta.credit||''; }
     // put the recognised chords into the skeleton ("?" per bar) of the current image
     skeletonFromGeo();
-    applyOcr(res,conf); applyLibrary();
+    applyOcr(res,conf); applyLibrary(); autoKey(); render();
     const got=res.filter(x=>x!=='?').length;
     msg.textContent=`Macの認識結果から、${got}/${res.length} 小節にコードを入れました。違うところは、原本の拡大を見ながら、コードをクリックして直してください。`;
   }catch(err){ alert('認識結果を読み込めませんでした: '+err.message); }
