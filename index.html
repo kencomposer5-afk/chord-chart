@@ -88,6 +88,9 @@ button:active{transform:translateY(1px)}
 .tok:hover{background:rgba(47,111,237,.15)}
 .tok.selc{background:var(--accent);color:var(--accent-ink)}
 .tok.selc .sd{color:inherit}
+.bar.unv .cr{outline:2px dashed #d9a400;outline-offset:-2px;border-radius:4px;background:rgba(255,200,0,.10)}
+.bar.unvlow .cr{outline-color:#d93025;background:rgba(217,48,37,.10)}
+.bar.unvhigh .cr{outline-color:#2e9e5b;background:rgba(46,158,91,.08)}
 .bar.sel .cr{background:rgba(47,111,237,.18);border-radius:4px}
 .bar.sel .st{outline:2px solid var(--accent);outline-offset:2px}
 .barbar{position:sticky;top:0;z-index:5;display:flex;gap:6px;align-items:center;flex-wrap:wrap;
@@ -125,6 +128,7 @@ button:active{transform:translateY(1px)}
   .viewWrap{display:block !important}
   .viewWrap.v-orig #chartPane{display:block !important}
   .bar.sel .cr{background:none}.bar.sel .st{outline:none}
+  .bar.unv .cr{outline:none;background:none}
   .barbar,.nosel-hint{display:none}
   body{background:#fff;color:#000}
   header,.ctrl{display:none}
@@ -418,6 +422,7 @@ function render(){
   });
   if (cur.length) lines.push(cur);
   LINES=lines; NBARS=bars.length; BARS=bars;
+  if(SEL!==null) UNVER.delete(SEL);
   const cols=Math.max(S.per, ...lines.map(l=>l.length));
   if (SEL!==null && SEL>=NBARS) SEL=null;
   if (SEL===null || SELCH>=(BARS[SEL]||{chords:[]}).chords.length) SELCH=null;
@@ -429,7 +434,7 @@ function render(){
     const grid=document.createElement('div'); grid.className='bars';
     grid.style.gridTemplateColumns=`repeat(${cols}, minmax(0,1fr))`;
     for (const b of ln){
-      const d=document.createElement('div'); d.className='bar'+(b.i===SEL?' sel':''); d.dataset.i=b.i;
+      const d=document.createElement('div'); d.className='bar'+(b.i===SEL?' sel':'')+(UNVER.has(b.i)?' unv unv'+UNVER.get(b.i):''); d.dataset.i=b.i;
       d.onclick=()=>{ SELCH=null; SEL=(SEL===b.i?null:b.i); render(); };
       const cr=document.createElement('div'); cr.className='cr';
       b.chords.forEach((t,k)=>{
@@ -731,10 +736,10 @@ async function finishImageImport(r,msg){
   const nb=r.rows.reduce((a,x)=>a+x.split('|').length-1,0);
   msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。コードを自動で読み取っています…(初回は少し時間がかかり、ネット接続が必要です)`;
   try{
-    const res=await autoRead((i,n)=>{ msg.textContent=`コードを自動で読み取り中… ${i+1}/${n} 小節`; });
-    applyOcr(res);
-    const got=res.filter(x=>x!=='?').length;
-    msg.textContent=`${r.rows.length} 段、${nb} 小節。自動で ${got} 小節にコードを入れました。精度は低く(合っているのは3〜5割程度)、♯や「7」が落ちることが多いです。原本の拡大を見ながら、コードをクリックして直してください(Enter で次へ進みます)。読み取れなかった小節は「?」です。`;
+    const {res,conf}=await autoRead((i,n)=>{ msg.textContent=`コードを自動で読み取り中… ${i+1}/${n} 小節`; });
+    applyOcr(res,conf);
+    const got=res.filter(x=>x!=='?').length, low=[...UNVER.values()].filter(v=>v==='low').length;
+    msg.textContent=`${r.rows.length} 段、${nb} 小節。自動で ${got} 小節にコードを入れました(自信の高さで、緑・黄・赤の点線で囲んであります。赤は ${low} 小節)。精度は低く(合っているのは3〜5割程度。緑の小節は約9割、赤の小節はほとんど間違いです)、♯や「7」が落ちることが多いです。原本の拡大を見ながら、コードをクリックして直してください。見た小節の点線は消えます。読み取れなかった小節は「?」です。`;
   }catch(err){
     msg.textContent=`${r.rows.length} 段、${nb} 小節を見つけました。自動読み取りは使えませんでした(${err.message})。原本を見ながら「?」を入力してください(Enter で次の小節へ進みます)。`;
   }
@@ -835,6 +840,11 @@ function cropForOcr(im,g){
   for(let i=0;i<W*H;i++){ const v=dark[i]?0:255; a[i*4]=a[i*4+1]=a[i*4+2]=v; a[i*4+3]=255; }
   c.putImageData(d,0,0); return cv;
 }
+function wordsToChords(words){      // [{t,x,y,w,h,conf}] -> [{c,conf}] (stacked chords merged)
+  const out=[];
+  for(const o of mergeStacked(words)) for(const x of splitChords(cleanTxt(o.t))) if(parseChord(x)) out.push({c:x,conf:o.conf});
+  return out;
+}
 function ocrToChords(text){
   const out=[];
   for(const raw of text.replace(/\n/g,' ').split(/\s+/)){
@@ -844,6 +854,7 @@ function ocrToChords(text){
   return out;
 }
 let OCR_RUNNING=false;
+const ocrWords=r=>{ const words=[]; (r.data.blocks||[]).forEach(bl=>bl.paragraphs.forEach(pa=>pa.lines.forEach(l=>l.words.forEach(wd=>words.push({t:wd.text,x:wd.bbox.x0,y:wd.bbox.y0,w:wd.bbox.x1-wd.bbox.x0,h:wd.bbox.y1-wd.bbox.y0,conf:wd.confidence})))));  return words; };
 async function autoRead(onProgress){
   if(OCR_RUNNING) return 0; OCR_RUNNING=true;
   try{
@@ -855,25 +866,24 @@ async function autoRead(onProgress){
     // pass 1: one line of text per bar (most accurate for plain chords)
     await w.setParameters({tessedit_pageseg_mode:'7'});
     const one=[];
-    for(let i=0;i<n;i++){ onProgress&&onProgress(i,n*2); one.push(crops[i]? ocrToChords((await w.recognize(crops[i])).data.text) : []); }
+    for(let i=0;i<n;i++){ onProgress&&onProgress(i,n*2); one.push(crops[i]? wordsToChords(ocrWords(await w.recognize(crops[i],{},{blocks:true}))) : []); }
     // pass 2: free layout with word boxes - only used when a chord is stacked over a bass note ("Dm7" over "G")
     await w.setParameters({tessedit_pageseg_mode:'6'});
-    const res=[];
+    const res=[], conf=[];
     for(let i=0;i<n;i++){
       onProgress&&onProgress(n+i,n*2); let ch=one[i];
-      if(crops[i]){
-        const r=await w.recognize(crops[i],{},{blocks:true}), words=[];
-        (r.data.blocks||[]).forEach(bl=>bl.paragraphs.forEach(pa=>pa.lines.forEach(l=>l.words.forEach(wd=>words.push({t:wd.text,x:wd.bbox.x0,y:wd.bbox.y0,w:wd.bbox.x1-wd.bbox.x0,h:wd.bbox.y1-wd.bbox.y0})))));
-        const two=[]; for(const o of mergeStacked(words)) for(const x of splitChords(cleanTxt(o.t))) if(parseChord(x)) two.push(x);
-        if(two.some(x=>x.includes('/'))) ch=two;
-      }
-      res.push(ch.length?ch.join(' '):'?');
+      if(crops[i]){ const two=wordsToChords(ocrWords(await w.recognize(crops[i],{},{blocks:true}))); if(two.some(x=>x.c.includes('/'))) ch=two; }
+      res.push(ch.length?ch.map(x=>x.c).join(' '):'?'); conf.push(ch.length?Math.min(...ch.map(x=>x.conf)):0);
     }
-    return res;
+    window.OCR_LAST={one,res,conf};
+    return {res,conf};
   } finally { OCR_RUNNING=false; }
 }
-function applyOcr(res){
-  let i=0; S.src=S.src.replace(/\?/g,()=>res[i++]||'?'); render();
+const UNVER=new Map();   // bar index -> 'low' | 'mid' : filled in by OCR and not looked at yet
+function applyOcr(res,conf){
+  let i=0; S.src=S.src.replace(/\?/g,()=>res[i++]||'?');
+  UNVER.clear(); res.forEach((x,k)=>{ if(x!=='?') UNVER.set(k,!conf?'mid':conf[k]<60?'low':conf[k]>=90?'high':'mid'); });
+  render();
 }
 
 // chords written as a fraction (chord over bass note) -> "Dm7/G"; items: {t,x,y,w,h}
@@ -884,7 +894,7 @@ function mergeStacked(its){
       const ca=A.x+A.w/2, cb=B.x+B.w/2, tb=cleanTxt(B.t);
       if(Math.abs(ca-cb)<0.7*Math.max(A.w,B.w) && B.y-A.y>0.6*Math.min(A.h,B.h) && B.y-A.y<2.2*Math.max(A.h,B.h)
          && /^[A-G][#b]?$/.test(tb) && splitChords(cleanTxt(A.t)).length===1 && parseChord(cleanTxt(A.t))){
-        A.t=cleanTxt(A.t)+'/'+tb; A.h=B.y+B.h-A.y; A.w=Math.max(A.w,B.w); B.used=true; } } }
+        A.t=cleanTxt(A.t)+'/'+tb; A.conf=Math.min(A.conf==null?100:A.conf,B.conf==null?100:B.conf); A.h=B.y+B.h-A.y; A.w=Math.max(A.w,B.w); B.used=true; } } }
   const m=its.filter(o=>!o.used);
   m.sort((a,b)=>Math.abs(a.y-b.y)>a.h*0.5?a.y-b.y:a.x-b.x);
   return m;
@@ -904,39 +914,39 @@ async function applyVisionJson(files){
   if(!BARGEO.length||!PAGES.length) throw new Error('先にPNGを読み込んでください');
   const sorted=[...files].sort((a,b)=>a.name.localeCompare(b.name,'ja',{numeric:true}));
   const data=[]; for(const f of sorted) data.push(JSON.parse(await f.text()));
-  const imgs={}, res=[];
+  const imgs={}, res=[], conf=[];
   for(const g of BARGEO){
     const d=data[Math.min(g.p,data.length-1)]; const q=g.q;
     let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
     const sx=d.width? im.width/d.width : 1, sy=d.height? im.height/d.height : 1;
     const its=[];
     for(const it of d.items||[]){
-      const o={t:it.t,x:it.x*sx,y:it.y*sy,w:it.w*sx,h:it.h*sy}, cx=o.x+o.w/2, cy=o.y+o.h/2;
+      const o={t:it.t,x:it.x*sx,y:it.y*sy,w:it.w*sx,h:it.h*sy,conf:(it.c==null?1:it.c)*100}, cx=o.x+o.w/2, cy=o.y+o.h/2;
       if(cx<g.x0-2||cx>g.x1+2||cy<g.c0-0.8*q||cy>g.c1+1.0*q) continue;
       its.push(o);
     }
     const merged=mergeStacked(its);
-    const ch=[];
+    const ch=[]; let cmin=100;
     for(const o of merged){
       const t=o.t.replace(/♭/g,'b').replace(/♯/g,'#').replace(/[△Δ]/g,'maj').replace(/[\s　]/g,'');
       for(const x of splitChords(t)){ if(!parseChord(x)) continue;
         if(x.length===1&&/[A-H]/.test(x)&&await boxedItem(im,o,q)) continue;
-        ch.push(x); }
+        ch.push(x); cmin=Math.min(cmin,o.conf==null?100:o.conf); }
     }
-    res.push(ch.length?ch.join(' '):'?');
+    res.push(ch.length?ch.join(' '):'?'); conf.push(ch.length?cmin:0);
   }
-  return res;
+  return {res,conf};
 }
 $('loadOcr').onclick=()=>{ if(!PAGES.length||!BARGEO.length){ alert('先に「PDF・画像を読み込む」でPNGを読み込んでください。'); return; } $('ocrIn').click(); };
 $('ocrIn').onchange=async e=>{
   const files=[...e.target.files]; e.target.value=''; if(!files.length) return;
   const msg=$('importMsg');
   try{
-    const res=await applyVisionJson(files);
+    const {res,conf}=await applyVisionJson(files);
     // put the recognised chords into the skeleton ("?" per bar) of the current image
     const byRow=new Map(); BARGEO.forEach(g=>byRow.set(g.row,(byRow.get(g.row)||0)+1));
     S.src=[...byRow.values()].map(n=>Array(n).fill('?').join(' | ')+' |').join('\n'); S.breaks=[]; S.manual=false;
-    applyOcr(res);
+    applyOcr(res,conf);
     const got=res.filter(x=>x!=='?').length;
     msg.textContent=`Macの認識結果から、${got}/${res.length} 小節にコードを入れました。違うところは、原本の拡大を見ながら、コードをクリックして直してください。`;
   }catch(err){ alert('認識結果を読み込めませんでした: '+err.message); }
