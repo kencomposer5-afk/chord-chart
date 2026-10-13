@@ -148,6 +148,8 @@ button:active{transform:translateY(1px)}
         <button id="saveFile">💾 ファイルに保存</button>
         <button id="loadFile">📂 ファイルを開く</button>
         <button id="loadPdf">📄 PDF・画像を読み込む</button>
+        <button id="loadOcr" title="Macの文字認識(Vision)の結果を読み込む">🧾 Mac認識結果(JSON)</button>
+        <input id="ocrIn" type="file" multiple accept=".json,application/json" style="display:none">
         <input id="pdfIn" type="file" multiple accept=".pdf,application/pdf,image/png,image/jpeg,image/webp" style="display:none">
         <input id="fileIn" type="file" accept=".json,.chord,application/json" style="display:none">
       </div>
@@ -673,7 +675,7 @@ function guessKey(ch){
 const fileToURL=f=>new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(r.error); r.readAsDataURL(f); });
 async function readImages(files){
   const rows=[], pages=[], geo=[];
-  let pi=-1;
+  let pi=-1, rowNo=0;
   for(const f of files){
     pi++;
     const url=await fileToURL(f); pages.push(url);
@@ -713,8 +715,8 @@ async function readImages(files){
       if(n>=1 && ink(bl[0],bl[1])>0.08){ n--; s0=1; }
       if(n<1) continue;
       const q=(st.bottom-st.top)/4;
-      for(let k=0;k<n;k++) geo.push({p:pi,x0:bl[s0+k]*sc,x1:bl[s0+k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc});
-      rows.push(Array(n).fill('?').join(' | ')+' |');
+      for(let k=0;k<n;k++) geo.push({p:pi,row:rowNo,x0:bl[s0+k]*sc,x1:bl[s0+k+1]*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc});
+      rows.push(Array(n).fill('?').join(' | ')+' |'); rowNo++;
     }
   }
   return {rows,pages,geo};
@@ -807,13 +809,13 @@ async function getTess(){
 function cropForOcr(im,g){
   const m=4, sx=Math.max(0,Math.round(g.x0+m)), sw=Math.round(g.x1-g.x0-2*m), sy=Math.max(0,Math.round(g.c0)), sh=Math.round(g.c1-g.c0);
   if(sw<8||sh<8) return null;
-  const f=Math.max(1,Math.min(6,96/sh)), cw=Math.round(sw*f), ch=Math.round(sh*f);
+  const f=Math.max(1,Math.min(8,(window.OCR_H||160)/sh)), cw=Math.round(sw*f), ch=Math.round(sh*f);
   const cv=document.createElement('canvas'); cv.width=cw+40; cv.height=ch+40;
   const c=cv.getContext('2d',{willReadFrequently:true}); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height);
   c.imageSmoothingQuality='high'; c.drawImage(im,sx,sy,sw,sh,20,20,cw,ch);
   // erase boxed rehearsal marks (big hollow rectangles) and sharpen to black on white
   const d=c.getImageData(0,0,cv.width,cv.height), W=cv.width,H=cv.height, a=d.data, dark=new Uint8Array(W*H);
-  for(let i=0;i<W*H;i++){ const v=0.299*a[i*4]+0.587*a[i*4+1]+0.114*a[i*4+2]; dark[i]=v<140?1:0; }
+  for(let i=0;i<W*H;i++){ const v=0.299*a[i*4]+0.587*a[i*4+1]+0.114*a[i*4+2]; dark[i]=v<(window.OCR_THR||190)?1:0; }
   const seen=new Uint8Array(W*H), qpx=g.q*f;
   for(let i=0;i<W*H;i++){ if(!dark[i]||seen[i]) continue;
     const st=[i]; seen[i]=1; let x0=W,x1=0,y0=H,y1=0,n=0;
@@ -852,6 +854,59 @@ async function autoRead(onProgress){
 function applyOcr(res){
   let i=0; S.src=S.src.replace(/\?/g,()=>res[i++]||'?'); render();
 }
+
+// ---------- Mac text recognition (Vision) results: tools/vision-ocr.swift -> JSON -> chords ----------
+async function boxedItem(im,it,q){          // is the item enclosed by a rectangle (rehearsal mark)?
+  const cv=document.createElement('canvas'), pad=Math.ceil(3*q);
+  const x0=Math.max(0,Math.floor(it.x-pad)), y0=Math.max(0,Math.floor(it.y)), w=Math.ceil(it.w+2*pad), h=Math.max(2,Math.ceil(it.h));
+  cv.width=w; cv.height=h; const c=cv.getContext('2d',{willReadFrequently:true}); c.drawImage(im,x0,y0,w,h,0,0,w,h);
+  const a=c.getImageData(0,0,w,h).data, dk=(x,y)=>0.299*a[(y*w+x)*4]+0.587*a[(y*w+x)*4+1]+0.114*a[(y*w+x)*4+2]<140;
+  const col=x=>{ if(x<0||x>=w) return false; let n=0; for(let y=0;y<h;y++) if(dk(x,y)) n++; return n>=h*0.8; };
+  let l=false,r=false; const ix=it.x-x0, jx=it.x+it.w-x0;
+  for(let d=2;d<=pad&&!(l&&r);d++){ if(!l&&col(Math.round(ix-d))) l=true; if(!r&&col(Math.round(jx+d))) r=true; }
+  return l&&r;
+}
+async function applyVisionJson(files){
+  if(!BARGEO.length||!PAGES.length) throw new Error('先にPNGを読み込んでください');
+  const sorted=[...files].sort((a,b)=>a.name.localeCompare(b.name,'ja',{numeric:true}));
+  const data=[]; for(const f of sorted) data.push(JSON.parse(await f.text()));
+  const imgs={}, res=[];
+  for(const g of BARGEO){
+    const d=data[Math.min(g.p,data.length-1)]; const q=g.q;
+    let im=imgs[g.p]; if(!im){ im=imgs[g.p]=new Image(); im.src=PAGES[g.p]; await im.decode(); }
+    const sx=d.width? im.width/d.width : 1, sy=d.height? im.height/d.height : 1;
+    const its=[];
+    for(const it of d.items||[]){
+      const o={t:it.t,x:it.x*sx,y:it.y*sy,w:it.w*sx,h:it.h*sy}, cx=o.x+o.w/2, cy=o.y+o.h/2;
+      if(cx<g.x0-2||cx>g.x1+2||cy<g.c0-0.8*q||cy>g.c1+1.0*q) continue;
+      its.push(o);
+    }
+    its.sort((a,b)=>Math.abs(a.y-b.y)>a.h*0.5?a.y-b.y:a.x-b.x);
+    const ch=[];
+    for(const o of its){
+      const t=o.t.replace(/♭/g,'b').replace(/♯/g,'#').replace(/[△Δ]/g,'maj').replace(/[\s　]/g,'');
+      for(const x of splitChords(t)){ if(!parseChord(x)) continue;
+        if(x.length===1&&/[A-H]/.test(x)&&await boxedItem(im,o,q)) continue;
+        ch.push(x); }
+    }
+    res.push(ch.length?ch.join(' '):'?');
+  }
+  return res;
+}
+$('loadOcr').onclick=()=>{ if(!PAGES.length||!BARGEO.length){ alert('先に「PDF・画像を読み込む」でPNGを読み込んでください。'); return; } $('ocrIn').click(); };
+$('ocrIn').onchange=async e=>{
+  const files=[...e.target.files]; e.target.value=''; if(!files.length) return;
+  const msg=$('importMsg');
+  try{
+    const res=await applyVisionJson(files);
+    // put the recognised chords into the skeleton ("?" per bar) of the current image
+    const byRow=new Map(); BARGEO.forEach(g=>byRow.set(g.row,(byRow.get(g.row)||0)+1));
+    S.src=[...byRow.values()].map(n=>Array(n).fill('?').join(' | ')+' |').join('\n'); S.breaks=[]; S.manual=false;
+    applyOcr(res);
+    const got=res.filter(x=>x!=='?').length;
+    msg.textContent=`Macの認識結果から、${got}/${res.length} 小節にコードを入れました。違うところは、原本の拡大を見ながら、コードをクリックして直してください。`;
+  }catch(err){ alert('認識結果を読み込めませんでした: '+err.message); }
+};
 
 // ---------- events ----------
 $('songSel').onchange=e=>{ const g=SONGS[e.target.value]; if(!g) return;
