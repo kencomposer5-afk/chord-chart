@@ -123,6 +123,11 @@ button:active{transform:translateY(1px)}
 /* wide screens: the controls, the chart and the original each scroll on their own */
 @media (min-width:821px){
   .wrap>.ctrl{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto;padding-right:2px}
+  /* always-visible scroll bars (macOS hides them otherwise) */
+  .wrap>.ctrl,#chartPane,#origPane{scrollbar-width:thin;scrollbar-color:#9aa3b5 transparent}
+  .wrap>.ctrl::-webkit-scrollbar,#chartPane::-webkit-scrollbar,#origPane::-webkit-scrollbar{width:9px;height:9px}
+  .wrap>.ctrl::-webkit-scrollbar-thumb,#chartPane::-webkit-scrollbar-thumb,#origPane::-webkit-scrollbar-thumb{background:#9aa3b5;border-radius:6px;border:2px solid transparent;background-clip:content-box}
+  .wrap>.ctrl::-webkit-scrollbar-track,#chartPane::-webkit-scrollbar-track,#origPane::-webkit-scrollbar-track{background:transparent}
   #sheetPanel{position:sticky;top:8px}
 }
 @media (min-width:1100px){
