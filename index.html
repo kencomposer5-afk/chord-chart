@@ -180,6 +180,7 @@ button:active{transform:translateY(1px)}
         <button id="loadFile">📂 ファイルを開く</button>
         <button id="loadPdf">📄 PDF・画像を読み込む</button>
         <button id="addPage" title="同じ曲の続きのページ(2枚目など)を、今の曲の後ろに足します">➕ 続きのページを足す</button>
+        <button id="reRead" title="今の原本の画像から、コードをもう一度自動で読み取ります(直したコードは上書きされます)">🔄 読み込み直す</button>
       </div>
       <div class="row" style="margin-bottom:8px">
         <button id="libSave" title="この譜面(原本の画像も含む)を、このブラウザの中に保存します">📚 ブラウザに保存</button>
@@ -265,7 +266,7 @@ button:active{transform:translateY(1px)}
     <button id="bJoin">⤴ 前の段につなげる</button>
     <button id="bReset" title="手動で付けた段の区切りをすべて消す">段をリセット</button>
     <button id="bClose">✕</button>
-    <div id="lensWrap" style="display:none;flex-basis:100%;margin-top:4px"><div class="hint" style="margin:0 0 2px">原本のこの小節(拡大)</div><canvas id="lens" style="max-width:100%;border:1px solid var(--border);border-radius:6px;background:#fff"></canvas></div>
+    <div id="lensWrap" style="display:none;flex-basis:100%;min-width:0;max-width:100%;margin-top:4px"><div class="hint" style="margin:0 0 2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">原本のこの小節(拡大)<span class="zoombar" style="margin:0"><button id="zlMinus" title="小さく">−</button><input type="range" id="lz" min="40" max="300" step="10" value="100"><button id="zlPlus" title="大きく">＋</button><span id="zlVal">100%</span></span></div><div id="lensBox" style="overflow:auto;max-height:60vh;width:100%"><canvas id="lens" style="display:block;border:1px solid var(--border);border-radius:6px;background:#fff"></canvas></div></div>
     <div id="markRow" style="flex-basis:100%;display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px">
       <span>セクション:</span>
       <input id="secIn" list="secList" style="width:7em" placeholder="Aメロ" autocomplete="off">
@@ -412,6 +413,7 @@ const S = {
   credit: store.get('credit',''),
   zCtrl: store.get('zCtrl',1),
   oz: store.get('oz',100),
+  lz: store.get('lz',100),
   breakSec: store.get('breakSec',true),
   fs:    store.get('fs',24),
   gap:   store.get('gap',18),
@@ -1070,6 +1072,16 @@ $('loadPdf').onclick=()=>{ window.__append=false; $('pdfIn').click(); };
 $('addPage').onclick=()=>{
   if(!PAGES.length){ alert('先に1枚目を「PDF・画像を読み込む」で読み込んでください。'); return; }
   window.__append=true; $('pdfIn').click(); };
+// read the current original pages again from scratch (after an update, or after learning more chord looks)
+$('reRead').onclick=async()=>{
+  if(!PAGES.length){ alert('原本の画像がありません。先に「PDF・画像を読み込む」で読み込んでください。'); return; }
+  if(!confirm('原本の画像から、コードをもう一度読み取りますか?\n今のコード(直したところも)は上書きされます。')) return;
+  const btn=$('reRead'), msg=$('importMsg'), keep={title:S.title,credit:S.credit};
+  btn.disabled=true; btn.textContent='読み取り中…';
+  try{ await finishImageImport(await readImageURLs(PAGES.slice()),msg); if(!S.title||S.title==='無題'){ Object.assign(S,keep); render(); } }
+  catch(err){ alert('読み込み直せませんでした: '+(err&&err.message||err)); }
+  finally{ btn.disabled=false; btn.textContent='🔄 読み込み直す'; }
+};
 // read the next page(s) on their own, then put them after the current song
 async function appendImageImport(r,msg){
   const old={src:S.src,pages:PAGES.slice(),geo:BARGEO.slice(),title:S.title,credit:S.credit,from:S.from,shift:S.shift,unver:new Map(UNVER),nb:BARS.length,
@@ -1151,13 +1163,26 @@ function drawLens(){
   wrap.style.display='';
   const url=PAGES[g.p]; let im=LENS_IMG[url];
   const draw=()=>{
-    const m=6, sx=Math.max(0,g.x0-m), sw=g.x1-g.x0+2*m, sy=Math.max(0,g.y0), sh=g.y1-g.y0, k=Math.min(6,560/sw), cv=$('lens');
+    const m=6, sx=Math.max(0,g.x0-m), sw=g.x1-g.x0+2*m, sy=Math.max(0,g.y0), sh=g.y1-g.y0, k=Math.min(10,1400/sw), cv=$('lens');
     cv.width=Math.round(sw*k); cv.height=Math.round(sh*k);
+    cv.dataset.base=Math.min(sw*6,560); sizeLens();
     const c=cv.getContext('2d'); c.imageSmoothingQuality='high'; c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height);
     c.drawImage(im,sx,sy,sw,sh,0,0,cv.width,cv.height);
   };
   if(!im){ im=LENS_IMG[url]=new Image(); im.onload=draw; im.src=url; } else if(im.complete) draw(); else im.onload=draw;
 }
+
+// lens size: 100% = fit the panel width (as before); the canvas is drawn at high resolution so zooming stays sharp
+function sizeLens(){
+  const cv=$('lens'); if(!cv.width) return;
+  const fit=Math.min(+cv.dataset.base||560, ($('lensBox').clientWidth||560)-2);
+  cv.style.width=Math.round(fit*S.lz/100)+'px';
+  $('lz').value=S.lz; $('zlVal').textContent=S.lz+'%';
+}
+function setLz(v){ S.lz=Math.max(40,Math.min(300,Math.round(v/10)*10)); store.set('lz',S.lz); sizeLens(); }
+$('zlMinus').onclick=()=>setLz(S.lz-20);
+$('zlPlus').onclick=()=>setLz(S.lz+20);
+$('lz').oninput=()=>setLz(+$('lz').value);
 
 // ---------- free automatic chord reading (Tesseract OCR in the browser; accuracy is modest) ----------
 const TESS='https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/';
