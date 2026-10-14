@@ -74,6 +74,12 @@ button:active{transform:translateY(1px)}
              radial-gradient(circle at 4px 62.5%,var(--line) 1.8px,transparent 2.3px)}
 .st.rs::before{left:3px} .st.re::after{right:3px}
 .bar.pad{visibility:hidden}
+.bar{position:relative}
+.bar.hv .cr{padding-top:1.05em}
+.vb{position:absolute;top:.15em;left:0;right:0;height:.6em;border-top:2px solid var(--line);pointer-events:none}
+.vb.s{left:5px;border-left:2px solid var(--line)}
+.vb.c{right:5px;border-right:2px solid var(--line)}
+.vb .vn{position:absolute;left:.3em;top:.05em;font-size:.56em;font-weight:700;color:var(--line);line-height:1}
 .tsig{position:absolute;left:calc(var(--sp) * .9);top:0;height:100%;display:flex;flex-direction:column;
   align-items:center;font-weight:900;color:var(--line);z-index:1;min-width:calc(var(--sp) * 2);
   font-family:"Times New Roman",Times,"Noto Serif","DejaVu Serif",serif;font-variant-numeric:lining-nums}
@@ -275,7 +281,7 @@ button:active{transform:translateY(1px)}
       <button id="secSet">付ける</button>
       <button id="repS" title="この小節からリピート">|: 開始</button>
       <button id="repE" title="この小節でリピートの終わり">:| 終わり</button>
-      <select id="markSel"><option value="">記号を足す…</option><option>×2</option><option>1.</option><option>2.</option><option>D.S.</option><option>D.C.</option><option>to Coda</option><option>Coda</option><option>Segno</option><option>Fine</option></select>
+      <button id="volta1" title="この小節から 1番かっこ(「1.)。:| の小節まで線が伸びます">「1.</button><button id="volta2" title="この小節に 2番かっこ(「2.)">「2.</button><select id="markSel"><option value="">記号を足す…</option><option>×2</option><option value="3.">「3.</option><option>D.S.</option><option>D.C.</option><option>to Coda</option><option>Coda</option><option>Segno</option><option>Fine</option></select>
     </div>
     <div id="chEdit" style="display:none;flex-basis:100%;gap:6px;align-items:center;flex-wrap:wrap;margin-top:4px">
       <span>コード:</span>
@@ -370,7 +376,7 @@ function parse(text){
   const toks = [...text.matchAll(/\|\||\|:|:\||\||\[[^\]]+\]|\S+?(?=\||$|\s)|\S+/g)];
   const bars = []; let cur = {chords:[],pos:[]}; let pendLabel=null, pendStart=false, pendLabelPos=null, pendStartPos=null;
   const flush = () => {
-    if (cur.chords.length || cur.rs || cur.re){
+    if (cur.chords.length || cur.rs || cur.re || cur.volta){
       if (pendLabel){cur.label=pendLabel; cur.labelPos=pendLabelPos; pendLabel=null;}
       if (pendStart){cur.rs=true; cur.rsPos=pendStartPos; pendStart=false;}
       bars.push(cur);
@@ -384,6 +390,7 @@ function parse(text){
     else if (t===':|'){ const rp=[m.index,m.index+2]; if(cur.chords.length){cur.re=true; cur.rePos=rp;} else if(bars.length){bars[bars.length-1].re=true; bars[bars.length-1].rePos=rp;} flush(); }
     else if (/^\[.+\]$/.test(t)){ flush(); pendLabel=t.slice(1,-1); pendLabelPos=[m.index,m.index+t.length]; }
     else if (/^\(\d{1,2}\/\d{1,2}\)$/.test(t)){ cur.ts=t.slice(1,-1); }   // time signature, e.g. (2/4)
+    else if (/^(?:[1-9]\.)+$/.test(t)){ cur.volta=t; cur.voltaPos=[m.index,m.index+t.length]; }   // 1st / 2nd ending: 1. 2. 1.3.
     else {
       if (!cur.chords.length){
         if (pendLabel){cur.label=pendLabel; cur.labelPos=pendLabelPos; pendLabel=null;}
@@ -476,6 +483,9 @@ function render(){
   });
   if (cur.length) lines.push(cur);
   LINES=lines; NBARS=bars.length; BARS=bars;
+  bars.forEach((b,i)=>{ if(!b.volta) return;
+    let end=i; for(let j=i;j<Math.min(bars.length,i+12);j++){ if(j>i&&(bars[j].volta||bars[j].rs)) break; if(bars[j].re){ end=j; break; } }
+    for(let j=i;j<=end;j++) bars[j].vb={s:j===i, e:j===end, c:j===end&&!!bars[j].re, n:j===i?b.volta:''}; });
   if(SEL!==null) UNVER.delete(SEL);
   const cols=Math.max(S.per, ...lines.map(l=>l.length));
   if (SEL!==null && SEL>=NBARS) SEL=null;
@@ -508,6 +518,9 @@ function render(){
         ts.innerHTML = (n==='4'&&dn==='4') ? '<span class="cc">C</span>' : `<span>${n}</span><span>${dn}</span>`;
         st.appendChild(ts); d.classList.add('hasts');
       }
+      if (b.vb){ const v=document.createElement('div'); v.className='vb'+(b.vb.s?' s':'')+(b.vb.c?' c':'');
+        if (b.vb.n){ const n=document.createElement('span'); n.className='vn'; n.textContent=b.vb.n; v.appendChild(n); }
+        d.appendChild(v); d.classList.add('hv'); }
       d.appendChild(cr); d.appendChild(st); grid.appendChild(d);
     }
     for (let i=ln.length;i<cols;i++){ const p=document.createElement('div'); p.className='bar pad';
@@ -595,7 +608,8 @@ function updateBarBar(){
   $('bSplit').disabled= first;
   $('bJoin').disabled = !(first && SEL>0);
   drawLens(); markOrig();
-  { const b=BARS[SEL]||{}; if(document.activeElement!==$('secIn')) $('secIn').value=b.label||''; $('repS').classList.toggle('on',!!b.rs); $('repE').classList.toggle('on',!!b.re); }
+  { const b=BARS[SEL]||{}; if(document.activeElement!==$('secIn')) $('secIn').value=b.label||''; $('repS').classList.toggle('on',!!b.rs); $('repE').classList.toggle('on',!!b.re);
+    $('volta1').classList.toggle('on',b.volta==='1.'); $('volta2').classList.toggle('on',b.volta==='2.'); }
   const ce=$('chEdit'); ce.style.display = SELCH===null ? 'none' : 'flex';
   if (SELCH!==null){ const t=BARS[SEL].chords[SELCH]; if(document.activeElement!==$('chIn')) $('chIn').value=dispTok(t); $('chIn').dataset.k=SEL+':'+SELCH; }
 }
@@ -877,6 +891,53 @@ function accidentalOf(t,capH){
   }
   return '';
 }
+// volta (1st / 2nd ending) brackets: a thin horizontal line above the chords whose left end hooks down "⌐ 1."
+// (a boxed label also has a hook at its left end, but it has a bottom edge; an "8va" line has text at its left end)
+function findVoltas(px,W,ya,yb,q){
+  const ink=(x,y)=>{ if(x<0||x>=W||y<0) return false; const i=(y*W+x)*4; return 0.299*px[i]+0.587*px[i+1]+0.114*px[i+2]<150; };
+  const out=[]; if(yb-ya<q) return out;
+  for(let y=ya;y<yb;y++){
+    let x=0;
+    while(x<W){
+      if(!ink(x,y)){ x++; continue; }
+      let e=x, gap=0; while(e+1<W&&(ink(e+1,y)||(gap<1&&ink(e+2,y)))){ if(!ink(e+1,y)) gap++; else gap=0; e++; }
+      const xL=x; x=e+1;
+      if(e-xL<0.8*q) continue;
+      const thin=(a,b)=>{ let t=0; for(let tx=a;tx<=b;tx++) if(ink(tx,y-3)||ink(tx,y+4)) t++; return t<=0.2*(b-a+1); };
+      if(!thin(xL+3,e)) continue;                                                      // a thin line, not part of a filled shape
+      // much longer than a letter's top stroke (F, E, T): long itself, or continued on the same height after the ending number
+      let ok=e-xL>=3*q;
+      if(!ok){ let gx=e+1; while(gx<e+5*q&&!(ink(gx,y)&&ink(gx+1,y)&&ink(gx+2,y)&&!ink(gx+1,y-3))) gx++;
+        if(gx<e+5*q){ let r=gx; while(r+1<W&&ink(r+1,y)) r++; ok=r-gx>=3*q&&thin(gx,r); } }
+      if(!ok) continue;
+      // hook going down at the left end
+      let L=0; while(L<5*q&&(ink(xL-1,y+L+1)||ink(xL,y+L+1)||ink(xL+1,y+L+1))) L++;
+      if(L<1.2*q||L>4*q) continue;
+      if(ink(xL+Math.round(0.6*q),y+Math.round(L*0.6))&&ink(xL+Math.round(0.6*q),y+Math.round(L*0.6)+1)) continue;   // filled, not a thin hook
+      // nothing just left of the hook (an 8va line or text runs into it)
+      let busy=0; for(let xx=Math.round(xL-0.6*q);xx<xL-1;xx++) for(let yy=y-1;yy<=y+1;yy++) if(ink(xx,yy)) busy++;
+      if(busy>2) continue;
+      // follow the line to the right across the ending number ("1.", "1.3.")
+      let R=e, xx=e+1, miss=0;
+      while(xx<W&&miss<6*q){ if(ink(xx,y)||ink(xx,y+1)||ink(xx,y-1)){ let r=xx; while(r+1<W&&(ink(r+1,y)||ink(r+1,y+1)||ink(r+1,y-1))) r++; if(r-xx>=0.8*q) R=r; xx=r+1; miss=0; } else { xx++; miss++; } }
+      if(R-xL<3*q) continue;
+      // a box: bottom edge under the line
+      let bot=0; for(let bx=xL;bx<=Math.min(R,xL+Math.round(4*q));bx++) if(ink(bx,y+L)||ink(bx,y+L-1)) bot++;
+      if(bot>=0.7*Math.min(R-xL+1,4*q+1)) continue;
+      if(out.some(v=>Math.abs(v.x-xL)<=3&&Math.abs(v.y-y)<=4)) continue;
+      // first digit after the first line piece: "1" is narrow (ignoring its foot serif)
+      const pts=[]; let gx0=-1;
+      for(let gx=e+1;gx<=Math.min(W-1,e+Math.round(4*q));gx++){ let col=false;
+        for(let gy=Math.round(y-1.0*q);gy<=y+Math.round(1.0*q);gy++){ if(Math.abs(gy-y)<=1) continue; if(ink(gx,gy)){ col=true; pts.push([gx,gy]); } }
+        if(col&&gx0<0) gx0=gx; if(!col&&gx0>=0&&gx-gx0>1) break; }
+      let one=false;
+      if(pts.length){ const c=Math.min(...pts.map(p=>p[1])), d=Math.max(...pts.map(p=>p[1])), h=d-c+1, top=pts.filter(p=>p[1]<=c+0.7*h).map(p=>p[0]);
+        one = h>=q && (Math.max(...top)-Math.min(...top)+1) < 0.45*h; }
+      out.push({x:xL,y,R,one});
+    }
+  }
+  return out;
+}
 async function readImages(files){ const urls=[]; for(const f of files) urls.push(await fileToURL(f)); return readImageURLs(urls); }
 async function readImageURLs(urls){
   const rows=[], pages=[], geo=[];
@@ -903,11 +964,17 @@ async function readImageURLs(urls){
       const lines=[]; for(const y of lineRows){ const l=lines[lines.length-1]; if(l&&y-l.b<=2) l.b=y; else lines.push({a:y,b:y}); }
       const sts=[]; for(const l of lines){ const st=sts[sts.length-1];
         if(st&&l.a-st.bottom<=45*u){ st.bottom=l.b; st.n++; st.lines.push(l); } else sts.push({top:l.a,bottom:l.b,n:1,lines:[l]}); }
+      sts.forEach(st=>{     // a long 1st-ending bracket just above a staff can join it as a 6th "line": drop lines spaced unlike the rest
+        while(st.lines.length>5){ const c=st.lines.map(l=>(l.a+l.b)/2), g=c.slice(1).map((v,i)=>v-c[i]), m=g.slice().sort((a,b)=>a-b)[Math.floor(g.length/2)];
+          if(g[0]>1.4*m) st.lines.shift(); else if(g[g.length-1]>1.4*m) st.lines.pop(); else break; }
+        st.n=st.lines.length; st.top=st.lines[0].a; st.bottom=st.lines[st.lines.length-1].b; });
       const full=sts.filter(t=>t.n>=5&&t.n<=6).length;
       if(!best||full>best.full) best={dk,staves:sts,full};
     }
     const dark=best.dk, staves=best.staves;
+    let prevBottom=0;
     for(const st of staves.filter(t=>t.n>=3)){
+      const pb=prevBottom; prevBottom=st.bottom;
       const hh=st.bottom-st.top+1, runs=[]; let run=null;
       for(let x=0;x<W;x++){ let c=0; for(let y=st.top;y<=st.bottom;y++) if(dark(x,y)) c++;
         if(c>=hh*0.9){ if(run&&x-run.b<=2) run.b=x; else { run={a:x,b:x}; runs.push(run);} } }
@@ -980,6 +1047,7 @@ async function readImageURLs(urls){
       const barCols=new Set(); runs.forEach(r=>{ for(let x=r.a-1;x<=r.b+1;x++) barCols.add(x); });
       const dotAt=(x,y)=>{ const r=Math.max(1,Math.round(q*0.3)); let n=0,t=0; for(let yy=Math.round(y-r);yy<=y+r;yy++){ if(lineRow(yy)) continue; for(let xx=Math.round(x-r);xx<=x+r;xx++){ if(xx<0||xx>=W||barCols.has(xx)) continue; t++; if(dark(xx,yy)) n++; } } return t>=4&&n/t>=0.4; };
       const dotsBeside=(cx,side)=>{ for(let dx=0.4*q;dx<=1.7*q;dx+=1){ const x=cx+side*dx; if(dotAt(x,st.top+1.5*q)&&dotAt(x,st.top+2.5*q)&&!dotAt(x,st.top+0.5*q)&&!dotAt(x,st.top+3.5*q)&&!dotAt(x+side*0.6*q,st.top+1.5*q)&&!dotAt(x+side*0.6*q,st.top+2.5*q)) return true; } return false; };
+      const voltas=findVoltas(px,W,Math.max(Math.round(pb+0.5*q),Math.round(st.top-20*q)),Math.round(st.top-2*q),q);
       for(let k=0;k<n;k++){
         const xs=starts[k], xe=starts[k+1];
         const startsHere=f=>starts.findIndex(x=>x>=f.a-q && x<=f.b+q)===k;
@@ -987,7 +1055,8 @@ async function readImageURLs(urls){
         geo.push({p:pi,row:rowNo,x0:xs*sc,x1:xe*sc,y0:(st.top-6*q)*sc,y1:(st.top+1.5)*sc,c0:(st.top-5.6*q)*sc,c1:(st.top-2)*sc,q:q*sc,
           sig:sigOf(xs+2,xe-2),toks:stToks.filter(t=>t.cx>=xs&&t.cx<xe).map(t=>({...t.sig,acc:'',x:t.cx,_t:t.raw})),
           lbox: fr? {x0:fr.a*sc,y0:fr.c*sc,x1:fr.b*sc,y1:fr.d*sc} : null,
-          rs: bl.some(x=>Math.abs(x-xs)<4)&&dotsBeside(xs,+1), re: bl.some(x=>Math.abs(x-xe)<4)&&dotsBeside(xe,-1)});
+          rs: bl.some(x=>Math.abs(x-xs)<4)&&dotsBeside(xs,+1), re: bl.some(x=>Math.abs(x-xe)<4)&&dotsBeside(xe,-1),
+          vglyph: (voltas.find(v=>v.x>=(k===0?0:xs-q)&&v.x<xe-q)||{}).one ?? null});
         if(fr) stFrames=stFrames.filter(f=>f!==fr);
       }
       rows.push(Array(n).fill('?').join(' | ')+' |'); rowNo++;
@@ -1004,6 +1073,10 @@ async function readImageURLs(urls){
       delete t._t; });
   }
   clusterBars(geo);
+  // 1st / 2nd ending numbers: a narrow first digit is "1"; otherwise count on from the previous ending
+  let lastV=0, lastAt=-99;
+  geo.forEach((g,i)=>{ if(g.vglyph===null||g.vglyph===undefined){ delete g.vglyph; return; }
+    const n=g.vglyph? 1 : (i-lastAt<=12&&lastV? lastV+1 : 2); g.volta=n+'.'; lastV=n; lastAt=i; delete g.vglyph; });
   return {rows,pages,geo};
 }
 
@@ -1015,7 +1088,7 @@ function layoutFromGeo(){          // one screen row per staff row of the origin
 }
 function skeletonFromGeo(){
   const byRow=new Map(); BARGEO.forEach(g=>byRow.set(g.row,(byRow.get(g.row)||0)+1));
-  const rows=new Map(); BARGEO.forEach(g=>{ const t=(g.label?`[${g.label}] `:'')+(g.rs?'|: ':'')+'?'+(g.re?' :|':''); (rows.get(g.row)||rows.set(g.row,[]).get(g.row)).push(t); });
+  const rows=new Map(); BARGEO.forEach(g=>{ const t=(g.label?`[${g.label}] `:'')+(g.rs?'|: ':'')+(g.volta?g.volta+' ':'')+'?'+(g.re?' :|':''); (rows.get(g.row)||rows.set(g.row,[]).get(g.row)).push(t); });
   S.src=[...rows.values()].map(r=>r.join(' | ')+' |').join('\n'); layoutFromGeo();
 }
 async function finishImageImport(r,msg){
@@ -1481,7 +1554,13 @@ $('repS').onclick=()=>barEdit((x,b)=>{ if(!b.rsPos) return insAt(x,b.pos[0][0],'
 $('repE').onclick=()=>barEdit((x,b)=>{ if(!b.rePos) return insAt(x,b.pos[b.pos.length-1][1],' :|');
   const [a,z]=b.rePos, after=nextChar(x,z); let st=a; while(st>0&&x[st-1]===' ') st--;
   return (after==='|'||after==='') ? cutAt(x,[st,z]) : cutAt(x,b.rePos,'|'); });
-$('markSel').onchange=e=>{ const v=e.target.value; e.target.value=''; if(!v) return; barEdit((x,b)=>insAt(x,b.pos[b.pos.length-1][1],' '+v)); };
+// 1st / 2nd ending bracket: put "1." before the bar's chords; press again to take it off
+const setVolta=v=>barEdit((x,b)=>{
+  if(b.voltaPos){ const [a,z]=b.voltaPos; let e=z; while(x[e]===' ') e++; return b.volta===v ? cutAt(x,[a,e]) : cutAt(x,[a,z],v); }
+  return insAt(x,b.pos[0][0],v+' '); });
+$('volta1').onclick=()=>setVolta('1.');
+$('volta2').onclick=()=>setVolta('2.');
+$('markSel').onchange=e=>{ const v=e.target.value; e.target.value=''; if(!v) return; if(/^\d\.$/.test(v)) return setVolta(v); barEdit((x,b)=>insAt(x,b.pos[b.pos.length-1][1],' '+v)); };
 
 // ---------- boxed section labels in the picture (A / B / Intro ...) ----------
 let tessLabel=null;

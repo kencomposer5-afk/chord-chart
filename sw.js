@@ -1,4 +1,4 @@
-const CACHE='chordchart-v18';
+const CACHE='chordchart-v19';
 const FILES=['./','./index.html','./manifest.json','./icon-192.png','./icon-512.png',
   './vendor/html2canvas.min.js','./vendor/jspdf.umd.min.js','./vendor/noto-music.woff2','./vendor/pdf.min.js','./vendor/pdf.worker.min.js'];
 self.addEventListener('install',e=>{e.waitUntil(caches.open(CACHE).then(c=>c.addAll(FILES)).then(()=>self.skipWaiting()));});
