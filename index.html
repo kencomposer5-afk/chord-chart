@@ -120,6 +120,15 @@ button:active{transform:translateY(1px)}
 .viewWrap{display:grid;gap:14px}
 .viewWrap.v-chart #origPane,.viewWrap.v-orig #chartPane{display:none}
 @media (min-width:1100px){ .viewWrap.v-split{grid-template-columns:minmax(0,1fr) minmax(0,1fr)} }
+/* wide screens: the controls, the chart and the original each scroll on their own */
+@media (min-width:821px){
+  .wrap>.ctrl{position:sticky;top:8px;max-height:calc(100vh - 16px);overflow:auto;padding-right:2px}
+  #sheetPanel{position:sticky;top:8px}
+}
+@media (min-width:1100px){
+  .viewWrap.v-split #chartPane{max-height:calc(100vh - 90px);overflow:auto;padding-right:4px}
+  .viewWrap.v-split #origPane,.viewWrap.v-orig #origPane{max-height:calc(100vh - 90px)!important}
+}
 #origPane{min-width:0}
 .viewWrap.v-split #origPane,.viewWrap.v-orig #origPane{position:sticky;top:8px;align-self:start;max-height:calc(100vh - 24px);overflow:auto;
   border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg)}
@@ -130,6 +139,7 @@ button:active{transform:translateY(1px)}
 .line{break-inside:avoid}
 .export-clone{position:fixed;left:-10000px;top:0;width:760px;background:#fff;color:#000;padding:0}
 @media print{
+  .wrap>.ctrl,#sheetPanel,#chartPane,#origPane{position:static!important;max-height:none!important;overflow:visible!important}
   #origPane,#viewTabs{display:none !important}
   .viewWrap{display:block !important}
   .viewWrap.v-orig #chartPane{display:block !important}
