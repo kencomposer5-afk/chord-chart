@@ -137,6 +137,9 @@ button:active{transform:translateY(1px)}
 #origPane{min-width:0}
 .viewWrap.v-split #origPane,.viewWrap.v-orig #origPane{position:sticky;top:8px;align-self:start;max-height:calc(100vh - 24px);overflow:auto;
   border:1px solid var(--border);border-radius:10px;padding:8px;background:var(--bg)}
+.zoombar{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--sub);margin:0 0 8px}
+.zoombar button{padding:2px 9px;font-size:15px;line-height:1.2}
+.zoombar span{min-width:2.6em;text-align:center}
 .orow{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:13px;margin-bottom:8px}
 #origImgs .pg{position:relative;margin:0 auto 10px}
 #origImgs img{display:block;width:100%;max-width:none;border:1px solid var(--border);background:#fff}
@@ -144,6 +147,8 @@ button:active{transform:translateY(1px)}
 .line{break-inside:avoid}
 .export-clone{position:fixed;left:-10000px;top:0;width:760px;background:#fff;color:#000;padding:0}
 @media print{
+  .zoombar{display:none!important}
+  #ctrlCol{zoom:1!important}
   .wrap>.ctrl,#sheetPanel,#chartPane,#origPane{position:static!important;max-height:none!important;overflow:visible!important}
   #origPane,#viewTabs{display:none !important}
   .viewWrap{display:block !important}
@@ -162,7 +167,8 @@ button:active{transform:translateY(1px)}
 <body>
 <header><h1>🎼 コード譜リレイアウト</h1></header>
 <div class="wrap">
-  <div class="ctrl">
+  <div class="ctrl" id="ctrlCol">
+    <div class="zoombar"><span>パネル</span><button id="zcMinus" title="小さく">−</button><span id="zcVal">100%</span><button id="zcPlus" title="大きく">＋</button><button id="zcReset" title="元の大きさ">↺</button></div>
     <div class="panel">
       <h2>① コードを入力</h2>
       <div class="row" style="margin-bottom:8px">
@@ -233,7 +239,7 @@ button:active{transform:translateY(1px)}
       <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="breakSec" checked>
         セクション([A] など)で必ず改行</label>
       <label>文字サイズ <span id="fsv"></span></label>
-      <input type="range" id="fs" min="14" max="40" step="1" style="width:100%">
+      <input type="range" id="fs" min="12" max="48" step="1" style="width:100%">
       <label>段の間隔 <span id="gapv"></span></label>
       <input type="range" id="gap" min="4" max="48" step="2" style="width:100%">
       <div class="row" style="margin-top:12px">
@@ -245,6 +251,7 @@ button:active{transform:translateY(1px)}
   </div>
 
   <div class="panel" id="sheetPanel">
+  <div class="zoombar ctrl" style="float:right"><span>譜面</span><button id="zsMinus" title="小さく">−</button><span id="zsVal"></span><button id="zsPlus" title="大きく">＋</button></div>
   <div class="seg ctrl" id="viewTabs" hidden style="margin-bottom:10px">
     <button data-v="chart">譜面</button><button data-v="split">並べて見る</button><button data-v="orig">原本(PDF)</button>
   </div>
@@ -283,7 +290,7 @@ button:active{transform:translateY(1px)}
   </div></div>
   <div id="origPane">
     <div class="orow ctrl"><b>原本(読み込んだPDF)</b>
-      <span>拡大 <input type="range" id="oz" min="40" max="200" value="100"></span>
+      <span class="zoombar"><button id="zoMinus" title="小さく">−</button><input type="range" id="oz" min="40" max="300" value="100"><button id="zoPlus" title="大きく">＋</button><span id="zoVal">100%</span></span>
       <button id="oClear">原本を消す</button></div>
     <div id="origImgs"></div>
   </div></div>
@@ -403,6 +410,8 @@ const S = {
   manual: store.get('manual',false),
   view:  store.get('view','chart'),
   credit: store.get('credit',''),
+  zCtrl: store.get('zCtrl',1),
+  oz: store.get('oz',100),
   breakSec: store.get('breakSec',true),
   fs:    store.get('fs',24),
   gap:   store.get('gap',18),
@@ -503,6 +512,7 @@ function render(){
   }
   updateBarBar();
   applyView();
+  applyZoom();
 }
 
 
@@ -1109,7 +1119,7 @@ const idb={
 function setPages(arr,geo){ PAGES=arr||[]; BARGEO=geo||[]; idb.set('pages',PAGES).catch(()=>{}); idb.set('bargeo',BARGEO).catch(()=>{}); }
 function renderOrig(){
   const box=$('origImgs'); box.innerHTML='';
-  PAGES.forEach((u,i)=>{ const pg=document.createElement('div'); pg.className='pg'; pg.style.width=$('oz').value+'%';
+  PAGES.forEach((u,i)=>{ const pg=document.createElement('div'); pg.className='pg'; pg.style.width=S.oz+'%';
     const im=new Image(); im.src=u; im.alt=`原本 ${i+1}ページ`; im.onload=()=>markOrig(); pg.appendChild(im); box.appendChild(pg); });
 }
 function markOrig(){               // orange box on the original page around the selected bar
@@ -1129,7 +1139,7 @@ function applyView(){
   [...$('viewTabs').children].forEach(b=>b.classList.toggle('on',b.dataset.v===S.view));
 }
 $('viewTabs').onclick=e=>{ if(e.target.dataset.v){ S.view=e.target.dataset.v; render(); } };
-$('oz').oninput=()=>[...$('origImgs').children].forEach(pg=>pg.style.width=$('oz').value+'%');
+$('oz').oninput=()=>setOz(+$('oz').value);
 $('oClear').onclick=()=>{ if(!confirm('読み込んだ原本の画像を消しますか?(譜面は消えません)')) return; setPages([]); S.view='chart'; renderOrig(); render(); };
 idb.get('toklib').then(l=>{ if(l&&l.length){ TOKLIB=l; updLibInfo(); } }).catch(()=>{});
 idb.get('pages').then(async p=>{ if(p&&p.length){ PAGES=p; try{ BARGEO=(await idb.get('bargeo'))||[]; }catch(e){} renderOrig(); render(); } }).catch(()=>{});
@@ -1473,6 +1483,23 @@ async function readSectionLabels(onMsg){
   idb.set('bargeo',BARGEO).catch(()=>{});
   return boxes.length;
 }
+
+// ---------- zoom: controls panel, chart, original ----------
+function applyZoom(){
+  S.zCtrl=Math.max(0.6,Math.min(1.6,Math.round(S.zCtrl*10)/10));
+  $('ctrlCol').style.zoom=S.zCtrl; $('zcVal').textContent=Math.round(S.zCtrl*100)+'%';
+  $('zsVal').textContent=Math.round(S.fs/24*100)+'%';
+  $('oz').value=S.oz; $('zoVal').textContent=S.oz+'%';
+  [...$('origImgs').children].forEach(pg=>pg.style.width=S.oz+'%');
+}
+$('zcMinus').onclick=()=>{ S.zCtrl-=0.1; render(); };
+$('zcPlus').onclick=()=>{ S.zCtrl+=0.1; render(); };
+$('zcReset').onclick=()=>{ S.zCtrl=1; render(); };
+$('zsMinus').onclick=()=>{ S.fs=Math.max(12,S.fs-2); render(); };
+$('zsPlus').onclick=()=>{ S.fs=Math.min(48,S.fs+2); render(); };
+const setOz=v=>{ S.oz=Math.max(40,Math.min(300,Math.round(v))); render(); markOrig(); };
+$('zoMinus').onclick=()=>setOz(S.oz-20);
+$('zoPlus').onclick=()=>setOz(S.oz+20);
 
 // ---------- events ----------
 $('songSel').onchange=e=>{ const g=SONGS[e.target.value]; if(!g) return;
