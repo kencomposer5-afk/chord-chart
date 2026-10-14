@@ -260,6 +260,7 @@ button:active{transform:translateY(1px)}
   <div class="nosel-hint ctrl" id="selHint">小節をクリックすると選べます(段の入れ替えができます)</div>
   <div class="barbar ctrl" id="barBar" hidden>
     <span class="msg" id="barMsg"></span>
+    <span class="zoombar" style="margin:0" title="この枠全体の大きさ"><span>枠</span><button id="zbMinus" title="小さく">−</button><span id="zbVal">100%</span><button id="zbPlus" title="大きく">＋</button><button id="zbReset" title="100%に戻す">↺</button></span>
     <button id="bUp">▲ 前の段へ</button>
     <button id="bDown">▼ 次の段へ</button>
     <button id="bSplit">✂ ここから新しい段</button>
@@ -414,6 +415,7 @@ const S = {
   zCtrl: store.get('zCtrl',1),
   oz: store.get('oz',100),
   lz: store.get('lz',100),
+  zBar: store.get('zBar',1),
   breakSec: store.get('breakSec',true),
   fs:    store.get('fs',24),
   gap:   store.get('gap',18),
@@ -1513,6 +1515,8 @@ async function readSectionLabels(onMsg){
 function applyZoom(){
   S.zCtrl=Math.max(0.6,Math.min(1.6,Math.round(S.zCtrl*10)/10));
   $('ctrlCol').style.zoom=S.zCtrl; $('zcVal').textContent=Math.round(S.zCtrl*100)+'%';
+  S.zBar=Math.max(0.6,Math.min(2,Math.round(S.zBar*10)/10));
+  $('barBar').style.zoom=S.zBar; $('zbVal').textContent=Math.round(S.zBar*100)+'%';
   $('zsVal').textContent=Math.round(S.fs/24*100)+'%';
   $('oz').value=S.oz; $('zoVal').textContent=S.oz+'%';
   [...$('origImgs').children].forEach(pg=>pg.style.width=S.oz+'%');
@@ -1520,6 +1524,10 @@ function applyZoom(){
 $('zcMinus').onclick=()=>{ S.zCtrl-=0.1; render(); };
 $('zcPlus').onclick=()=>{ S.zCtrl+=0.1; render(); };
 $('zcReset').onclick=()=>{ S.zCtrl=1; render(); };
+const setZb=v=>{ S.zBar=v; applyZoom(); store.set('zBar',S.zBar); sizeLens(); };
+$('zbMinus').onclick=()=>setZb(S.zBar-0.1);
+$('zbPlus').onclick=()=>setZb(S.zBar+0.1);
+$('zbReset').onclick=()=>setZb(1);
 $('zsMinus').onclick=()=>{ S.fs=Math.max(12,S.fs-2); render(); };
 $('zsPlus').onclick=()=>{ S.fs=Math.min(48,S.fs+2); render(); };
 const setOz=v=>{ S.oz=Math.max(40,Math.min(300,Math.round(v))); render(); markOrig(); };
