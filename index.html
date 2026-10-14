@@ -530,7 +530,7 @@ function staffHead(toPc, flats){
 
 function chordHTML(s){
   const m = CHORD_RE.exec(s); if(!m) return esc(s);
-  const acc = a => a==='#'?'<span class="acc">♯</span>': a==='b'?'<span class="acc">♭</span>':'';
+  const acc = a => (a==='#'||a==='♯')?'<span class="acc">♯</span>': (a==='b'||a==='♭')?'<span class="acc">♭</span>':'';
   let h = m[1]+acc(m[2])+ '<small>'+esc(m[3].replace(/b/g,'♭').replace(/#/g,'♯'))+'</small>';
   if (m[4]) h += '/'+m[4]+acc(m[5]);
   return h;
@@ -597,7 +597,9 @@ document.addEventListener('keydown',e=>{ if(e.key==='Escape' && SEL!==null){ SEL
 function curFlats(){ return useFlats((keyPc(S.from)+S.shift+120)%12, S.mode); }
 function dispTok(t){ return parseChord(t) ? transposeTok(t,S.shift,curFlats()) : t; }   // as shown on screen
 function srcTok1(v){ return parseChord(v) ? transposeTok(v,-S.shift,useFlats(keyPc(S.from),S.mode)) : v; }  // back to the original key
-function srcTok(v){ return v.trim().split(/\s+/).map(srcTok1).join(' '); }
+// sharps / flats as typed: "*", "＃", "＊", "♯" -> "#" and "♭" -> "b" (right after a note letter)
+const normAcc=v=>v.replace(/([A-G])[*＊＃♯]/g,'$1#').replace(/([A-G])♭/g,'$1b');
+function srcTok(v){ return normAcc(v.trim()).split(/\s+/).map(srcTok1).join(' '); }
 function editSrc(fn){ S.src=fn(S.src); render(); }
 $('chOk').onclick=()=>{ const v=$('chIn').value.trim(); if(!v||SELCH===null) return;
   const bi=SEL, [a,b]=BARS[SEL].pos[SELCH]; editSrc(x=>x.slice(0,a)+srcTok(v)+x.slice(b));
@@ -1477,7 +1479,10 @@ $('songSel').onchange=e=>{ const g=SONGS[e.target.value]; if(!g) return;
   Object.assign(S,{title:g.title,src:g.src.trim(),from:g.from,mode:g.mode,shift:0,breaks:[],manual:false}); SEL=null; e.target.value=''; render(); };
 $('titleIn').oninput=e=>{S.title=e.target.value; render();};
 $('creditIn').oninput=e=>{S.credit=e.target.value; render();};
-$('src').oninput=e=>{S.src=e.target.value; render();};
+$('src').oninput=e=>{
+  const v=e.target.value, n=normAcc(v);
+  if(n!==v){ const pos=e.target.selectionStart; e.target.value=n; e.target.setSelectionRange(pos,pos); }
+  S.src=n; render(); };
 $('fromKey').onchange=e=>{S.from=e.target.value; render();};
 $('up').onclick=()=>{S.shift=((S.shift+1+5)%12)-5; render();};
 $('down').onclick=()=>{S.shift=((S.shift-1+5+12)%12)-5; render();};
