@@ -158,6 +158,7 @@ button:active{transform:translateY(1px)}
         <button id="saveFile">💾 ファイルに保存</button>
         <button id="loadFile">📂 ファイルを開く</button>
         <button id="loadPdf">📄 PDF・画像を読み込む</button>
+        <button id="addPage" title="同じ曲の続きのページ(2枚目など)を、今の曲の後ろに足します">➕ 続きのページを足す</button>
       </div>
       <div class="row" style="margin-bottom:8px">
         <button id="libSave" title="この譜面(原本の画像も含む)を、このブラウザの中に保存します">📚 ブラウザに保存</button>
@@ -1038,7 +1039,23 @@ async function finishImageImport(r,msg){
 }
 
 $('libReset').onclick=()=>{ if(!TOKLIB.length||!confirm('覚えたコードの見た目をすべて消しますか?')) return; TOKLIB=[]; idb.set('toklib',[]).catch(()=>{}); updLibInfo(); };
-$('loadPdf').onclick=()=>$('pdfIn').click();
+$('loadPdf').onclick=()=>{ window.__append=false; $('pdfIn').click(); };
+$('addPage').onclick=()=>{
+  if(!PAGES.length){ alert('先に1枚目を「PDF・画像を読み込む」で読み込んでください。'); return; }
+  window.__append=true; $('pdfIn').click(); };
+// read the next page(s) on their own, then put them after the current song
+async function appendImageImport(r,msg){
+  const old={src:S.src,pages:PAGES.slice(),geo:BARGEO.slice(),title:S.title,credit:S.credit,from:S.from,shift:S.shift,unver:new Map(UNVER),nb:BARS.length,
+             rows:BARGEO.length? Math.max(...BARGEO.map(g=>g.row))+1 : 0};
+  await finishImageImport(r,msg);
+  const add=BARGEO.map(g=>({...g,p:g.p+old.pages.length,row:g.row+old.rows})), newSrc=S.src, newUnver=new Map(UNVER), addedBars=add.length;
+  setPages(old.pages.concat(PAGES), old.geo.concat(add));
+  Object.assign(S,{src:old.src.replace(/\s*$/,'')+'\n'+newSrc, title:old.title, credit:old.credit, from:old.from, shift:old.shift});
+  layoutFromGeo();
+  UNVER.clear(); old.unver.forEach((v,k)=>UNVER.set(k,v)); newUnver.forEach((v,k)=>UNVER.set(k+old.nb,v));
+  SEL=null; SELCH=null; renderOrig(); render();
+  msg.textContent=`続きのページを足しました(${r.pages.length} ページ、${addedBars} 小節)。今は全部で ${PAGES.length} ページです。`+(msg.textContent?' '+msg.textContent:'');
+}
 $('pdfIn').onchange=async e=>{
   const files=[...e.target.files]; e.target.value=''; const f=files[0]; if(!f) return; e.target.__files=files;
   const msg=$('importMsg'), btn=$('loadPdf'), label=btn.textContent;
@@ -1046,7 +1063,8 @@ $('pdfIn').onchange=async e=>{
   try{
     if(f.type.startsWith('image/')){
       const imgs=[...e.target.__files].filter(x=>x.type.startsWith('image/')).sort((a,b)=>a.name.localeCompare(b.name,'ja',{numeric:true}));
-      await finishImageImport(await readImages(imgs),msg);
+      const rr=await readImages(imgs);
+      if(window.__append&&PAGES.length){ window.__append=false; await appendImageImport(rr,msg); } else await finishImageImport(rr,msg);
       return;
     }
     const r=await readPdf(f);
