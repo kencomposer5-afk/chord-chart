@@ -662,17 +662,38 @@ function splitChords(str){            // "CmG7" -> ["Cm","G7"]
   }
   if(cur) out.push(cur); return out;
 }
+async function pdfPagePicture(page){
+  try{       // the page's one big embedded image, at its own resolution
+    const ops=await page.getOperatorList(), names=[];
+    ops.fnArray.forEach((f,i)=>{ if(f===pdfjsLib.OPS.paintImageXObject) names.push(ops.argsArray[i][0]); });
+    if(names.length===1){
+      const img=await new Promise((res,rej)=>{ const t=setTimeout(()=>rej(new Error('timeout')),5000); page.objs.get(names[0],o=>{ clearTimeout(t); res(o); }); });
+      const W=img.width, H=img.height, cv=document.createElement('canvas'); cv.width=W; cv.height=H; const c=cv.getContext('2d');
+      if(img.bitmap) c.drawImage(img.bitmap,0,0);
+      else if(img.data){ const id=c.createImageData(W,H), d=img.data, n=W*H;
+        if(d.length===n*4) id.data.set(d); else if(d.length===n*3){ for(let i=0;i<n;i++){ id.data[4*i]=d[3*i]; id.data[4*i+1]=d[3*i+1]; id.data[4*i+2]=d[3*i+2]; id.data[4*i+3]=255; } } else throw new Error('format');
+        c.putImageData(id,0,0); }
+      else throw new Error('no pixels');
+      if(W>=600) return cv.toDataURL('image/jpeg',0.92);
+    }
+  }catch(e){}
+  const v3=page.getViewport({scale:3}), c3=document.createElement('canvas'); c3.width=Math.ceil(v3.width); c3.height=Math.ceil(v3.height);
+  const x3=c3.getContext('2d'); x3.fillStyle='#fff'; x3.fillRect(0,0,c3.width,c3.height); await page.render({canvasContext:x3,viewport:v3}).promise;
+  return c3.toDataURL('image/jpeg',0.9);
+}
 async function readPdf(file){
   await loadPdfJs();
   const pdf=await pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
   const rows=[], pages=[]; let title='', credit='', firstChord=null, nChords=0;
   for(let pn=1; pn<=pdf.numPages; pn++){
     const page=await pdf.getPage(pn), SC=2, vp=page.getViewport({scale:SC});
+    const hasText=(await page.getTextContent()).items.some(it=>it.str&&it.str.trim());
     const W=Math.ceil(vp.width), H=Math.ceil(vp.height);
     const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
     const ctx=cv.getContext('2d',{willReadFrequently:true}); ctx.fillStyle='#fff'; ctx.fillRect(0,0,W,H);
     await page.render({canvasContext:ctx,viewport:vp}).promise;
-    pages.push(cv.toDataURL('image/jpeg',0.82));
+    if(hasText) pages.push(cv.toDataURL('image/jpeg',0.82));
+    else pages.push(await pdfPagePicture(page));   // a picture-only PDF (screen capture): use the picture itself, not a resampled copy
     const px=ctx.getImageData(0,0,W,H).data;
     const dark=(x,y)=>{const i=(y*W+x)*4; return px[i]<110&&px[i+1]<110&&px[i+2]<110;};
     // 1) staves: long horizontal dark lines, grouped
@@ -1080,6 +1101,168 @@ async function readImageURLs(urls){
   return {rows,pages,geo};
 }
 
+// ---------- chord sheets without staves (e.g. web pages: "Aメロ" box, "00:09 lyrics", chord names over guitar diagrams) ----------
+const SECTION_RE=/^(イントロ|前奏|[A-DＡ-Ｄ]メロ|サビ|大サビ|ラスサビ|落ちサビ|Cメロ|間奏|後奏|アウトロ|エンディング|ブリッジ|Intro|Verse|Pre-?Chorus|Chorus|Bridge|Interlude|Outro|Ending)\d*$/i;
+async function loadImg(url){ const im=new Image(); im.src=url; await im.decode(); return im; }
+function scaledCanvas(im,k,sx=0,sy=0,sw=im.width,sh=im.height){
+  const cv=document.createElement('canvas'); cv.width=Math.round(sw*k); cv.height=Math.round(sh*k);
+  const c=cv.getContext('2d'); c.fillStyle='#fff'; c.fillRect(0,0,cv.width,cv.height); c.imageSmoothingQuality='high'; c.drawImage(im,sx,sy,sw,sh,0,0,cv.width,cv.height); return cv;
+}
+const tessWords=(r,k,ox=0,oy=0)=>{ const out=[]; (r.data.blocks||[]).forEach(bl=>bl.paragraphs.forEach(pa=>pa.lines.forEach(l=>l.words.forEach(wd=>{ const b=wd.bbox;
+  out.push({t:wd.text,x:ox+b.x0/k,y:oy+b.y0/k,w:(b.x1-b.x0)/k,h:(b.y1-b.y0)/k,conf:wd.confidence}); })))); return out; };
+async function visionWords(url,im){
+  const d=await window.webkit.messageHandlers.vision.postMessage({image:url}), sx=d.width?im.width/d.width:1, sy=d.height?im.height/d.height:1;
+  return (d.items||[]).map(o=>({t:o.t,x:o.x*sx,y:o.y*sy,w:o.w*sx,h:o.h*sy}));
+}
+async function tessChordWords(im){          // whole page, English, chord characters only
+  const k=Math.max(1,Math.min(2.5,2400/im.width)), w=await getTess();
+  await w.setParameters({tessedit_pageseg_mode:'11',tessedit_char_whitelist:'ABCDEFGMNmajdimsugtol0123456789#b/()+-.:♯♭ '});
+  try{ return tessWords(await w.recognize(scaledCanvas(im,k),{},{blocks:true}),k); }
+  finally{ await w.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'ABCDEFGmajdimsu0123456789#b/()+- '}); }
+}
+async function tessText(im,box,psm){        // Japanese + English text of one region
+  const k=box? Math.max(2,Math.min(5,90/box.h)) : Math.max(1,Math.min(2,2000/im.width)), w=await getTessJpn();
+  await w.setParameters({tessedit_pageseg_mode:psm});
+  try{ const b=box||{x:0,y:0,w:im.width,h:im.height}; return tessWords(await w.recognize(scaledCanvas(im,k,b.x,b.y,b.w,b.h),{},{blocks:true}),k,b.x,b.y); }
+  finally{ await w.setParameters({tessedit_pageseg_mode:'6'}); }
+}
+// small hollow boxes with text inside ("Aメロ", "サビ", "Intro")
+function labelBoxes(im){
+  const k=Math.min(1,1400/im.width), cv=scaledCanvas(im,k), W=cv.width, H=cv.height, px=cv.getContext('2d').getImageData(0,0,W,H).data;
+  const dk=new Uint8Array(W*H); for(let i=0;i<W*H;i++) dk[i]=(0.299*px[4*i]+0.587*px[4*i+1]+0.114*px[4*i+2])<140?1:0;
+  const lab=new Int32Array(W*H), out=[];
+  for(let i=0;i<W*H;i++){ if(!dk[i]||lab[i]) continue;
+    const stk=[i], pts=[]; lab[i]=1; let a=W,b=0,c=H,d=0;
+    while(stk.length){ const j=stk.pop(), x=j%W, y=(j-x)/W; pts.push(j); if(x<a)a=x; if(x>b)b=x; if(y<c)c=y; if(y>d)d=y;
+      for(const n of [j-1,j+1,j-W,j+W]){ if(n<0||n>=W*H||lab[n]||!dk[n]) continue; if((n===j-1&&x===0)||(n===j+1&&x===W-1)) continue; lab[n]=1; stk.push(n); } }
+    const w=b-a+1, h=d-c+1;
+    if(h<9||h>45||w<h*1.1||w>h*9||pts.length>0.5*w*h) continue;
+    const row=new Map(), col=new Map(); pts.forEach(j=>{ const x=j%W, y=(j-x)/W; row.set(y,(row.get(y)||0)+1); col.set(x,(col.get(x)||0)+1); });
+    const edge=(m,f,t,len)=>{ for(let v=f;v<=t;v++) if((m.get(v)||0)>=len*0.85) return true; return false; };
+    if(edge(row,c,c+1,w)&&edge(row,d-1,d,w)&&edge(col,a,a+1,h)&&edge(col,b-1,b,h)) out.push({x:(a+2)/k,y:(c+2)/k,w:(w-4)/k,h:(h-4)/k});
+  }
+  return out;
+}
+// guitar chord diagrams: a short thick vertical bar (the nut) with grid lines running right from its ends
+function diagramRows(im){
+  const k=Math.min(1,1800/im.width), cv=scaledCanvas(im,k), W=cv.width, H=cv.height, px=cv.getContext('2d').getImageData(0,0,W,H).data;
+  const L=(x,y)=>{ const i=(y*W+x)*4; return 0.299*px[i]+0.587*px[i+1]+0.114*px[i+2]; };
+  const runs=[];        // per column: vertical dark runs 14..90 px
+  for(let x=0;x<W;x++){ let a=-1; for(let y=0;y<=H;y++){ const d=y<H&&L(x,y)<150; if(d&&a<0) a=y; else if(!d&&a>=0){ if(y-a>=14&&y-a<=90) runs.push({x,a,b:y-1}); a=-1; } } }
+  const key=r=>r.a+','+r.b, by=new Map(); runs.forEach(r=>{ for(let da=-1;da<=1;da++) for(let db=-1;db<=1;db++){ const kk=(r.a+da)+','+(r.b+db); (by.get(kk)||by.set(kk,[]).get(kk)).push(r); } });
+  const nuts=[], used=new Set();
+  runs.forEach(r=>{ if(used.has(r)) return; const grp=(by.get(key(r))||[]).filter(o=>o.x>=r.x&&o.x<=r.x+6&&!used.has(o));
+    const xs=[...new Set(grp.map(o=>o.x))].sort((a,b)=>a-b); let n=1; while(xs.includes(r.x+n)) n++;
+    if(n<2||n>7) return; grp.forEach(o=>used.add(o));
+    const h=r.b-r.a+1, xe=r.x+n, gl=y=>{ let c=0; for(let x=xe;x<xe+Math.round(0.8*h)&&x<W;x++) if(L(x,y)<215||(y>0&&L(x,y-1)<215)||(y<H-1&&L(x,y+1)<215)) c++; return c>=0.75*Math.round(0.8*h); };
+    if(!gl(r.a)||!gl(r.b)) return;
+    // the strings: 5-7 thin lines across the grid, light paper between them (rules out photos and icons)
+    let groups=0, inG=false, sum=0; const x1=Math.min(W,xe+Math.round(0.8*h));
+    for(let y=r.a;y<=r.b;y++){ let c=0; for(let x=xe+2;x<x1;x++) if(L(x,y)<215) c++; const f=c/Math.max(1,x1-xe-2); sum+=f;
+      if(f>=0.6&&!inG){ groups++; inG=true; } else if(f<0.6) inG=false; }
+    if(groups>=4&&groups<=8&&sum/h<0.7) nuts.push({x:r.x,a:r.a,b:r.b,h}); });
+  if(nuts.length<2) return null;
+  const D=nuts.map(n=>n.h).sort((a,b)=>a-b)[Math.floor(nuts.length/2)], good=nuts.filter(n=>n.h>0.8*D&&n.h<1.25*D).sort((a,b)=>a.a-b.a||a.x-b.x);
+  const rows=[]; good.forEach(n=>{ let r=rows.find(r=>Math.abs(r.a-n.a)<0.5*D); if(!r){ r={a:n.a,b:n.b,xs:[]}; rows.push(r); }
+    if(!r.xs.some(x=>Math.abs(x-n.x)<1.4*D)) r.xs.push(n.x); });
+  rows.forEach(r=>{ r.xs.sort((a,b)=>a-b); r.a/=k; r.b/=k; r.xs=r.xs.map(x=>x/k); });
+  return {D:D/k, rows:rows.sort((a,b)=>a.a-b.a)};
+}
+async function tessBand(im,box){            // one row of chord names, English chord characters only
+  const k=Math.max(2,Math.min(6,110/box.h)), w=await getTess();
+  await w.setParameters({tessedit_pageseg_mode:'7',tessedit_char_whitelist:'ABCDEFGMNmajdimsugt0123456789#b/()+-. '});
+  try{ return tessWords(await w.recognize(scaledCanvas(im,k,box.x,box.y,box.w,box.h),{},{blocks:true}),k,box.x,box.y); }
+  finally{ await w.setParameters({tessedit_char_whitelist:'ABCDEFGmajdimsu0123456789#b/()+- '}); }
+}
+const splitItems=ws=>ws.flatMap(o=>{ const ts=o.t.trim().split(/\s+/); if(ts.length<2) return [o]; const n=o.t.trim().length; let i=0;
+  return ts.map(t=>{ const x=o.x+o.w*i/n; i+=t.length+1; return {...o,t,x,w:o.w*t.length/n}; }); });
+function chordWord(t){
+  t=(t||'').trim().replace(/[♯＃]/g,'#').replace(/♭/g,'b').replace(/[（]/g,'(').replace(/[）]/g,')').replace(/[|｜:.]+$/,m=>/^N/.test(t)?m:'');
+  if(/^N\.?C\.?$/i.test(t)) return 'N.C.';
+  if(/^[A-G]/.test(t)&&t.length<=12&&parseChord(t)) return t;
+  return null;
+}
+// lines of words (same height on the page), left to right
+function wordLines(words){
+  const ls=[]; words.slice().sort((a,b)=>(a.y+a.h/2)-(b.y+b.h/2)).forEach(o=>{ const cy=o.y+o.h/2;
+    const L=ls.find(l=>Math.abs(l.cy-cy)<0.55*Math.max(l.h,o.h)); if(L){ L.w.push(o); L.h=Math.max(L.h,o.h); } else ls.push({cy,h:o.h,w:[o]}); });
+  ls.forEach(l=>{ l.w.sort((a,b)=>a.x-b.x); l.text=l.w.map(o=>o.t).join(''); });
+  return ls.sort((a,b)=>a.cy-b.cy);
+}
+const fixSection=t=>t.replace(/\s/g,'').replace(/^[\[\(【]|[\]\)】]$/g,'').replace(/^[Ａ-Ｄ]/,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0));
+async function readChordSheet(urls,msg){
+  const items=[]; let meta=null;
+  for(let p=0;p<urls.length;p++){
+    msg.textContent=`五線が無いので、コード名を文字として読み取っています… ${p+1}/${urls.length} ページ(1ページ数十秒かかります)`;
+    const im=await loadImg(urls[p]), vw=NATIVE_VISION()? await visionWords(urls[p],im) : null;
+    let firstY=1e9;
+    const dg=diagramRows(im);
+    if(dg&&dg.rows.length){       // chord names stand right above guitar diagrams: read each diagram row's name band
+      const D=dg.D;
+      for(let ri=0;ri<dg.rows.length;ri++){ const r=dg.rows[ri];
+        msg.textContent=`コード名を読み取り中… ${p+1}/${urls.length} ページ、${ri+1}/${dg.rows.length} 行`;
+        const box={x:Math.max(0,Math.round(r.xs[0]-0.9*D)),y:Math.max(0,Math.round(r.a-0.95*D)),w:0,h:Math.round(0.78*D)};
+        box.w=Math.min(im.width-box.x,Math.round(r.xs[r.xs.length-1]+2.2*D-box.x));
+        const ws=splitItems(vw? vw.filter(o=>{ const cx=o.x+o.w/2, cy=o.y+o.h/2; return cx>box.x&&cx<box.x+box.w&&cy>box.y&&cy<box.y+box.h; }) : await tessBand(im,box));
+        const chords=r.xs.map(x=>{ const cx=x+0.5*D, near=ws.filter(o=>Math.abs(o.x+o.w/2-cx)<0.9*D).sort((a,b)=>Math.abs(a.x+a.w/2-cx)-Math.abs(b.x+b.w/2-cx));
+          const t=near.map(o=>chordWord(o.t)).find(Boolean)||(near[0]&&/^N/i.test(near[0].t)?'N.C.':'?'); return {c:t,cx}; });
+        items.push({p,y:r.a,chords}); firstY=Math.min(firstY,box.y);
+      }
+    }
+    // chord rows (pages without diagrams): lines made (mostly) of chord names
+    let cw=dg&&dg.rows.length? [] : (vw||await tessChordWords(im)).filter(o=>o.t&&o.t.trim());
+    const ch=cw.filter(o=>chordWord(o.t)), hMed=ch.map(o=>o.h).sort((a,b)=>a-b)[Math.floor(ch.length/2)]||12;
+    const lines=wordLines(cw.filter(o=>o.h<2*hMed));
+    for(const l of lines){
+      if(l.w.some(o=>/^\d{1,2}[:.]\d{2}$|^\d{4,5}$/.test(o.t))) continue;               // "00:09 lyrics" line
+      const cs=l.w.map(o=>({o,c:chordWord(o.t)})).filter(x=>x.c);
+      if(!cs.length||cs.length<0.6*l.w.filter(o=>o.t.length>1||/[A-G]/.test(o.t)).length) continue;
+      if(vw&&l.w.some(o=>/[぀-鿿]/.test(o.t))) continue;
+      items.push({p,y:l.cy,chords:cs.map(x=>({c:x.c,cx:x.o.x+x.o.w/2}))}); firstY=Math.min(firstY,l.cy);
+    }
+    // section boxes
+    for(const bx of labelBoxes(im)){
+      let t='';
+      if(vw) t=vw.filter(o=>o.x+o.w/2>bx.x&&o.x+o.w/2<bx.x+bx.w&&o.y+o.h/2>bx.y&&o.y+o.h/2<bx.y+bx.h).map(o=>o.t).join('');
+      else t=(await tessText(im,{x:Math.max(0,bx.x-2),y:Math.max(0,bx.y-2),w:bx.w+4,h:bx.h+4},'7')).map(o=>o.t).join('');
+      t=fixSection(t).replace(/[|｜!！_ー一]+$|^[|｜!！_上]+/g,'');
+      const m=/(イントロ|[A-D]メロ|大サビ|ラスサビ|落ちサビ|サビ|間奏|後奏|アウトロ|エンディング|Intro|Verse|Chorus|Bridge|Outro|Interlude)/i.exec(t); if(m) t=m[1];
+      if(!t||t.length>12||/^\d+$/.test(t)||/カポ|Capo|表示/i.test(t)) continue;
+      items.push({p,y:bx.y+bx.h/2,label:t});
+    }
+    if(p===0&&firstY<1e9){       // title: the biggest text above the chords (not the site name / breadcrumbs / BPM / dates)
+      const tw=vw? vw.filter(o=>o.y<firstY) : await tessText(im,{x:0,y:0,w:im.width,h:Math.round(Math.min(firstY,im.height))},'11');
+      const head=wordLines(tw.filter(o=>o.t&&o.t.trim())).filter(l=>!/BPM|公開日|更新日|トップ|>|＞|検索|ランキング|履歴|カポ|Key/.test(l.text)&&!/^[\s\d!-\/:-@\[-`{-~]*$/.test(l.text));
+      const big=head.filter(l=>/[\u3040-\u9fff]/.test(l.text)||/[A-Za-z]{3}/.test(l.text)).sort((a,b)=>b.h-a.h)[0];
+      if(big){ const cr=head.find(l=>l.cy>big.cy&&l.cy<big.cy+5*big.h);
+        const join=l=>l.w.map(o=>o.t).join(' ').replace(/(?<=[^\x00-\x7F]) (?=[^\x00-\x7F])/g,'');
+        meta={title:join(big),credit:cr?join(cr):''}; }
+    }
+  }
+  const rows=items.sort((a,b)=>a.p-b.p||a.y-b.y), chordRows=rows.filter(r=>r.chords);
+  if(!chordRows.length) return false;
+  // chord names stand over a fixed grid of half-bar slots: slot width = the usual spacing, slot 0 = where rows start
+  const gaps=[]; chordRows.forEach(r=>r.chords.forEach((c,i)=>{ if(i) gaps.push(c.cx-r.chords[i-1].cx); }));
+  gaps.sort((a,b)=>a-b);
+  const pitch=gaps.length? gaps[Math.floor(gaps.length*0.25)] : 60;
+  const firsts=chordRows.map(r=>r.chords[0].cx).sort((a,b)=>a-b), x0=firsts[Math.floor(firsts.length*0.25)];
+  const out=[]; let label=null, prev=null;
+  for(const r of rows){
+    if(r.label){ label=r.label; continue; }
+    const slots=[]; r.chords.forEach(c=>{ let s=Math.max(0,Math.round((c.cx-x0)/pitch)); while(slots[s]) s++; slots[s]=c.c; });
+    const nb=Math.max(2,Math.ceil(slots.length/2)), bars=[];
+    for(let b=0;b<nb;b++){ const a=slots[2*b], z=slots[2*b+1];
+      if(!a&&!z){ bars.push(prev?'%':'N.C.'); continue; }
+      bars.push([a||prev, z].filter(Boolean).join(' ')); prev=z||a; }
+    out.push((label?`[${label}] `:'')+bars.join(' | ')+' |'); label=null;
+  }
+  Object.assign(S,{src:out.join('\n'), shift:0, breaks:[], manual:false, per:4});
+  if(meta&&meta.title){ S.title=meta.title; S.credit=meta.credit||''; }
+  SEL=null; SELCH=null; setPages(urls,[]); S.view='split'; renderOrig(); autoKey(); render();
+  msg.textContent=`五線の無いコード譜として読み取りました: ${chordRows.length} 行、${parse(S.src).length} 小節(1行を2小節として、コードの間隔から拍を推測しています)。読み違いがあれば、原本を見ながらコードをクリックして直してください。`;
+  return true;
+}
+
 const NATIVE_VISION=()=>!!(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.vision);
 function layoutFromGeo(){          // one screen row per staff row of the original, wide enough for the longest row
   const starts=[]; let prev=-1, run=0, mx=0;
@@ -1092,7 +1275,10 @@ function skeletonFromGeo(){
   S.src=[...rows.values()].map(r=>r.join(' | ')+' |').join('\n'); layoutFromGeo();
 }
 async function finishImageImport(r,msg){
-  if(!r.rows.length) throw new Error('五線を見つけられませんでした');
+  if(!r.rows.length){      // no staves: maybe a web chord sheet (chord names over guitar diagrams, lyrics, section boxes)
+    if(await readChordSheet(r.pages,msg)) return;
+    throw new Error('五線も、コード名も見つけられませんでした');
+  }
   Object.assign(S,{src:r.rows.join('\n'), shift:0, breaks:[], manual:false});
   SEL=null; SELCH=null; setPages(r.pages,r.geo); layoutFromGeo(); S.view='split'; renderOrig();
   try{ await readSectionLabels(t=>{ msg.textContent=t; }); }catch(e){}
