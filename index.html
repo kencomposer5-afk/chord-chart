@@ -106,6 +106,9 @@ button:active{transform:translateY(1px)}
 .head .clef{left:.3em;top:calc(var(--sp) * -1.6);font-size:calc(var(--sp) * 6.6)}
 .head .ka{font-size:calc(var(--sp) * 4.2);transform:translateY(-62%)}
 .ch{white-space:nowrap}
+.ch .nq{font-size:.92em}
+.ch .nqs{font-size:.62em;vertical-align:.45em;margin-left:.04em}
+.sd .nq{font-size:1em}
 .ch small{font-size:.62em;vertical-align:.3em;font-weight:700;letter-spacing:-.02em}
 .ch .acc{font-size:.7em;vertical-align:.25em;margin-right:-.05em}
 .txt{font-weight:600;font-style:italic;font-size:.75em;color:var(--sub)}
@@ -520,7 +523,13 @@ const DEG=['I','♭II','II','♭III','III','IV','♯IV','V','♭VI','VI','♭VII
 const NASH=['1','♭2','2','♭3','3','4','♯4','5','♭6','6','♭7','7'];
 function degHTML(tok, mode){
   const c=parseChord(tok); if(!c) return null;
-  const k=keyPc(S.from), T=(mode||S.disp)==='nash'?NASH:DEG, d=n=>T[(n-k+12)%12];
+  const nash=(mode||S.disp)==='nash', k=keyPc(S.from), T=nash?NASH:DEG, d=n=>T[(n-k+12)%12];
+  if(nash){                          // Nashville: "2m", "5", "7m7-5" written inline
+    const q=c.q.replace(/^m7\((b|♭|-)5\)$|^m7(b|♭)5$|^ø7?$/,'m7-5').replace(/\((b|♭)(\d+)\)/g,'-$2').replace(/\((#|♯)(\d+)\)/g,'+$2');
+    let h=d(c.root)+(/^\d/.test(q)? '<sup class="nqs">'+esc(q)+'</sup>' : '<span class="nq">'+esc(q)+'</span>');   // "3⁷" so it does not read as 37
+    if(c.bass!==null) h+='/'+d(c.bass);
+    return h;
+  }
   let h=d(c.root)+'<small>'+esc(c.q.replace(/b/g,'♭').replace(/#/g,'♯'))+'</small>';
   if(c.bass!==null) h+='/'+d(c.bass);
   return h;
